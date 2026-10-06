@@ -98,6 +98,50 @@ begin
   return request_id;
 end $$;
 
+create or replace function public.search_people(search_text text)
+returns table(id uuid, username text, display_name text, about text, avatar_path text, relationship_status text, request_id uuid)
+language sql stable security invoker set search_path = public, pg_temp as $$
+  with query_text as (
+    select lower(trim(leading '@' from trim(coalesce(search_text, '')))) as value
+  )
+  select p.id, p.username, p.display_name, p.about, p.avatar_path,
+    case
+      when exists (
+        select 1 from public.contact_requests r
+        where r.status='accepted'
+          and ((r.sender_id=auth.uid() and r.receiver_id=p.id) or (r.sender_id=p.id and r.receiver_id=auth.uid()))
+      ) then 'friend'
+      when exists (select 1 from public.contact_requests r where r.sender_id=auth.uid() and r.receiver_id=p.id and r.status='pending') then 'outgoing'
+      when exists (select 1 from public.contact_requests r where r.sender_id=p.id and r.receiver_id=auth.uid() and r.status='pending') then 'incoming'
+      when exists (select 1 from public.contact_requests r where r.sender_id=auth.uid() and r.receiver_id=p.id and r.status='declined') then 'declined'
+      else 'available'
+    end as relationship_status,
+    (select r.id from public.contact_requests r where r.sender_id=p.id and r.receiver_id=auth.uid() and r.status='pending' order by r.created_at desc limit 1) as request_id
+  from public.profiles p cross join query_text q
+  where auth.uid() is not null and p.id<>auth.uid() and char_length(q.value)>=2
+    and (strpos(lower(p.username),q.value)>0 or strpos(lower(p.display_name),q.value)>0)
+  order by (lower(p.username)=q.value) desc, p.username
+  limit 25;
+$$;
+
+create or replace function public.send_friend_request(target_user uuid)
+returns uuid language plpgsql security invoker set search_path = public, pg_temp as $$
+declare actor_id uuid := auth.uid(); request_id uuid;
+begin
+  if actor_id is null then raise exception 'Sign in required'; end if;
+  if target_user is null or not exists(select 1 from public.profiles p where p.id=target_user) then raise exception 'Person not found'; end if;
+  if target_user=actor_id then raise exception 'You cannot add yourself'; end if;
+  if exists(select 1 from public.contact_requests r where r.status='accepted' and ((r.sender_id=actor_id and r.receiver_id=target_user) or (r.sender_id=target_user and r.receiver_id=actor_id))) then raise exception 'Already friends'; end if;
+  if exists(select 1 from public.contact_requests r where r.sender_id=target_user and r.receiver_id=actor_id and r.status='pending') then raise exception 'They already sent you a friend request. Open Friend requests to confirm it.'; end if;
+  insert into public.contact_requests(sender_id,receiver_id) values(actor_id,target_user)
+    on conflict(sender_id,receiver_id) do nothing returning id into request_id;
+  if request_id is null then
+    select r.id into request_id from public.contact_requests r where r.sender_id=actor_id and r.receiver_id=target_user and r.status='pending';
+    if request_id is null then raise exception 'Your previous friend request was declined'; end if;
+  end if;
+  return request_id;
+end $$;
+
 create or replace function public.accept_contact_request(request_id uuid)
 returns uuid language plpgsql security definer set search_path = public, pg_temp as $$
 declare req public.contact_requests; conv_id uuid;
@@ -139,11 +183,15 @@ returns boolean language sql stable security definer set search_path = public, p
   select exists(select 1 from public.conversation_members where conversation_id=target_conversation and user_id=auth.uid());
 $$;
 revoke all on function public.create_contact_request(text) from public, anon;
+revoke all on function public.search_people(text) from public, anon;
+revoke all on function public.send_friend_request(uuid) from public, anon;
 revoke all on function public.accept_contact_request(uuid) from public, anon;
 revoke all on function public.decline_contact_request(uuid) from public, anon;
 revoke all on function public.handle_new_user() from public, anon, authenticated;
 revoke all on function private.is_conversation_member(uuid) from public, anon;
 grant execute on function public.create_contact_request(text) to authenticated;
+grant execute on function public.search_people(text) to authenticated;
+grant execute on function public.send_friend_request(uuid) to authenticated;
 grant execute on function public.accept_contact_request(uuid) to authenticated;
 grant execute on function public.decline_contact_request(uuid) to authenticated;
 grant execute on function private.is_conversation_member(uuid) to authenticated;

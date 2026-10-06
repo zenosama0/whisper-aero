@@ -95,8 +95,24 @@ export async function loadInbox(userId) {
   return { chats, requests };
 }
 
-export async function createContactRequest(username) {
-  const { error } = await supabase.rpc('create_contact_request', { target_username: username });
+export async function searchPeople(searchText) {
+  const term = String(searchText || '').trim().replace(/^@/, '');
+  if (term.length < 2) return [];
+  const { data, error } = await supabase.rpc('search_people', { search_text: term });
+  if (error) throw error;
+  return Promise.all((data || []).map(async person => {
+    let avatar = '';
+    if (person.avatar_path) {
+      const { data: signed, error: avatarError } = await supabase.storage.from('profile-avatars').createSignedUrl(person.avatar_path, 3600);
+      if (!avatarError) avatar = signed?.signedUrl || '';
+    }
+    return { id: person.id, username: person.username, name: person.display_name, about: person.about || '', avatar, initial: person.display_name.slice(0, 1).toUpperCase(), color: '#dce8e2', relationship: person.relationship_status, requestId: person.request_id };
+  }));
+}
+
+export async function sendFriendRequest(targetUserId) {
+  if (!isUuid(targetUserId)) throw new Error('Choose a person from the search results, then send the friend request.');
+  const { error } = await supabase.rpc('send_friend_request', { target_user: targetUserId });
   if (error) throw error;
 }
 export async function acceptContactRequest(requestId) {
