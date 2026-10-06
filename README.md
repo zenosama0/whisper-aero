@@ -5,7 +5,7 @@ Whisper is a web-first messenger with a Windows Aero appearance, a minimal theme
 ## Features
 
 - Email and password sign-up with a public username, plus sign-in across devices.
-- Username-based message requests that create a conversation after acceptance.
+- Search for people by display name or username, send friend requests, and create conversations after acceptance.
 - Realtime text messages and emoji reactions, stored in Supabase.
 - Private profile photos and one-time attachments up to 3 MB. The recipient downloads the file and the Edge Function removes the server copy.
 - A call notification signal. It does not carry audio or video.
