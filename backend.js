@@ -5,6 +5,8 @@ const ready = Boolean(config.supabaseUrl && config.supabaseAnonKey);
 export const supabase = ready ? createClient(config.supabaseUrl, config.supabaseAnonKey) : null;
 export const configured = ready;
 let liveChannel;
+const isUuid = value => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+const requireConversationId = value => { if (!isUuid(value)) throw new Error('This conversation is not ready yet. The recipient must accept the message request first.'); };
 
 export async function signUp({ email, password, username, displayName }) {
   return supabase.auth.signUp({ email, password, options: { data: { username: username.toLowerCase(), display_name: displayName }, emailRedirectTo: `${window.location.origin}${window.location.pathname}` } });
@@ -98,15 +100,18 @@ export async function createContactRequest(username) {
   if (error) throw error;
 }
 export async function acceptContactRequest(requestId) {
+  if (!isUuid(requestId)) throw new Error('This request is invalid. Refresh your requests and try again.');
   const { data, error } = await supabase.rpc('accept_contact_request', { request_id: requestId });
   if (error) throw error;
   return data;
 }
 export async function declineContactRequest(requestId) {
+  if (!isUuid(requestId)) throw new Error('This request is invalid. Refresh your requests and try again.');
   const { error } = await supabase.rpc('decline_contact_request', { request_id: requestId });
   if (error) throw error;
 }
 export async function createCallInvite(conversationId) {
+  requireConversationId(conversationId);
   const { data: { user }, error: userError } = await supabase.auth.getUser();
   if (userError) throw userError;
   if (!user) throw new Error('Sign in again to send a call notification.');
@@ -114,6 +119,7 @@ export async function createCallInvite(conversationId) {
   if (error) throw error;
 }
 export async function sendMessage(conversationId, body) {
+  requireConversationId(conversationId);
   const { data: { user }, error: userError } = await supabase.auth.getUser();
   if (userError) throw userError;
   if (!user) throw new Error('Sign in again to send a message.');
@@ -121,6 +127,7 @@ export async function sendMessage(conversationId, body) {
   if (error) throw error;
 }
 export async function sendAttachment(conversationId, file) {
+  requireConversationId(conversationId);
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('Sign in again to send a file.');
   const form = new FormData();

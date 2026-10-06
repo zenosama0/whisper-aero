@@ -26,7 +26,7 @@ jobs:
       - name: Prepare static site
         run: |
           mkdir _site
-          cp -R index.html styles.css auth.css app.js backend.js app-config.js icon.svg manifest.webmanifest sw.js robots.txt sitemap.xml _site/
+          cp -R index.html styles.css auth.css overrides.css app.js backend.js app-config.js icon.svg manifest.webmanifest sw.js robots.txt sitemap.xml _site/
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site

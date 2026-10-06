@@ -1,0 +1,166 @@
+/* Keep the conversation workspace flush with the viewport on desktop and mobile. */
+html,
+body {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+}
+
+body {
+  overflow: hidden;
+}
+
+.app-shell {
+  width: 100%;
+  max-width: none;
+  height: 100vh;
+  height: 100svh;
+  height: 100dvh;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+@media (max-width: 700px) {
+  .app-shell {
+    height: 100vh;
+    height: 100svh;
+    height: 100dvh;
+  }
+}
+
+/* Keep controls readable against dark surfaces. */
+body.dark {
+  color-scheme: dark;
+}
+
+body.dark .field,
+body.dark select.field,
+body.dark .searchbox,
+body.dark .compose-input {
+  color: #e5eeeb;
+  background: #263330;
+  border-color: #42514d;
+}
+
+body.dark .field::placeholder,
+body.dark .searchbox input::placeholder,
+body.dark .compose-input textarea::placeholder {
+  color: #a5b4b0;
+}
+
+body.dark .searchbox input,
+body.dark .compose-input textarea {
+  color: #e5eeeb;
+}
+
+body.dark .secondary-btn,
+body.dark .outline-btn,
+body.dark .reaction-chip,
+body.dark .download-btn {
+  color: #e5eeeb;
+  background: #2a3834;
+  border-color: #455450;
+}
+
+body.dark .secondary-btn:hover,
+body.dark .outline-btn:hover,
+body.dark .download-btn:hover,
+body.dark .reaction-chip:hover {
+  background: #344640;
+}
+
+body.dark .rail,
+body.dark .sidebar,
+body.dark .chat-header,
+body.dark .composer,
+body.dark .composer-hint,
+body.dark .details {
+  background: #202b29;
+  color: #e5eeeb;
+}
+
+body.dark .rail {
+  border-color: #34413e;
+}
+
+body.dark .rail-btn:hover,
+body.dark .rail-btn.selected,
+body.dark .chat-item:hover,
+body.dark .chat-item.active,
+body.dark .filter.active {
+  color: #d9ece4;
+  background: #30413b;
+}
+
+body.dark .filter {
+  color: #c0ceca;
+  background: #2a3834;
+}
+
+body.dark .day-label,
+body.dark .bubble,
+body.dark .message-tools,
+body.dark .emoji-pop {
+  color: #e5eeeb;
+  background: #293633;
+  border-color: #40504b;
+}
+
+body.dark .message-tools button,
+body.dark .icon-btn,
+body.dark .attach-btn,
+body.dark .emoji-btn,
+body.dark .details-close,
+body.dark .modal-x {
+  color: #c4d2ce;
+}
+
+body.dark .modal h2,
+body.dark .modal .field-label,
+body.dark .request-person strong,
+body.dark .settings-row,
+body.dark .details h3 {
+  color: #e5eeeb;
+}
+
+body.dark .modal p,
+body.dark .modal .field-help,
+body.dark .request-person small,
+body.dark .settings-row small,
+body.dark .chat-time,
+body.dark .details > p,
+body.dark .details .muted,
+body.dark .about-copy {
+  color: #aebdb8 !important;
+}
+
+body.dark .request-card button {
+  color: #dcebe5;
+  background: #344640;
+}
+
+body.dark .request-card button.accept,
+body.dark .primary-btn,
+body.dark .send-btn {
+  color: #fff;
+  background: #548c73;
+}
+
+body.dark .chat-banner {
+  color: #b3c2bd;
+  background: #202b29;
+}
+
+body.dark .profile-chip {
+  border-color: #3c4b47;
+}
+
+body.dark .detail-sep,
+body.dark .sidebar-foot,
+body.dark .settings-row,
+body.dark .request-card {
+  border-color: #354440;
+}
