@@ -1,19 +1,23 @@
 # Whisper
 
-A web-first messaging interface with Windows Aero-inspired and minimal appearances. The static client is designed for GitHub Pages, with a Supabase schema draft under `supabase/schema.sql`.
+Whisper is a web-first messenger with a Windows Aero appearance, a minimal theme, and an optional dark theme. It is built as a static site for GitHub Pages, with Supabase providing account authentication, message storage, realtime updates, private profile photos, and one-time attachments.
 
-## Preview
+## Features
 
-Serve the folder with a local static server or publish it with GitHub Pages. The current chat interactions use this browser's local storage. They are not yet connected to real accounts or cross-device sync.
+- Email and password sign-up with a public username, plus sign-in across devices.
+- Username-based message requests that create a conversation after acceptance.
+- Realtime text messages and emoji reactions, stored in Supabase.
+- Private profile photos and one-time attachments up to 3 MB. The recipient downloads the file and the Edge Function removes the server copy.
+- A call notification signal. It does not carry audio or video.
+- PWA installation and a service worker for the app shell.
+- Browser notification permission for alerts while Whisper is open in a browser. Closed-app push delivery needs additional notification service setup.
 
-## GitHub Pages
+## Deployment
 
-The workflow at `.github/workflows/pages.yml` deploys the static files from `main`. It reads the public Supabase project URL and anon key from repository secrets named `WHISPER_SUPABASE_URL` and `WHISPER_SUPABASE_ANON_KEY`. The public anon key is designed for browser use when every database table has correct row-level security. Never put a service-role key in client code.
+The GitHub Actions workflow at `.github/workflows/pages.yml` publishes the static client to [GitHub Pages](https://zenosama0.github.io/whisper-aero/). The Supabase URL and publishable browser key are in `app-config.js`. The publishable key is intended for browser use and is protected by database row-level security. Never put a service-role key in client code.
 
-The sitemap and robots file are set to `https://zenosama0.github.io/whisper-aero/`. Update them if the GitHub owner or repository name changes.
+The sitemap and robots file use `https://zenosama0.github.io/whisper-aero/`.
 
-## Supabase setup
+## Supabase
 
-Create a Supabase project, apply `supabase/schema.sql` in its SQL editor, and configure the Auth site URL and allowed redirect URL for the GitHub Pages site. Add the project URL and anon key as the two repository secrets above. The database schema includes profiles, contact requests, conversations, messages, reactions, private avatar storage, and a 3 MB attachment metadata table.
-
-Authentication and the chat client still need to be connected to this schema. The current prototype's messages, requests, and profile edits remain local until that integration is complete. A server-side attachment download/delete function and push notifications also remain to be implemented.
+The live project is `gotwpxxvwolmtieinlmz` in the Mumbai region. Its schema is in `supabase/schema.sql`; the deployed attachment Edge Function is under `supabase/functions/attachments/`. Account confirmation links must be allowed to redirect to the GitHub Pages URL in the Supabase Auth URL configuration. The database uses row-level security for profiles, requests, conversations, messages, reactions, attachments, and call invites.

@@ -15,17 +15,18 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
     steps:
       - uses: actions/checkout@v6
       - uses: actions/configure-pages@v5
-      - name: Prepare static site and public Supabase config
-        env:
-          SUPABASE_URL: ${{ secrets.WHISPER_SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.WHISPER_SUPABASE_ANON_KEY }}
+        with:
+          enablement: true
+      - name: Prepare static site
         run: |
           mkdir _site
-          cp -R index.html styles.css app.js app-config.js icon.svg manifest.webmanifest sw.js robots.txt sitemap.xml _site/
-          node -e 'const fs=require("node:fs"); fs.writeFileSync("_site/app-config.js", `window.WHISPER_CONFIG = ${JSON.stringify({supabaseUrl:process.env.SUPABASE_URL||"",supabaseAnonKey:process.env.SUPABASE_ANON_KEY||""})};\n`);'
+          cp -R index.html styles.css auth.css app.js backend.js app-config.js icon.svg manifest.webmanifest sw.js robots.txt sitemap.xml _site/
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site

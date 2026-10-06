@@ -57,10 +57,31 @@ create table if not exists public.attachments (
   file_name text not null,
   mime_type text not null,
   size_bytes integer not null check (size_bytes between 1 and 3145728),
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  downloaded_at timestamptz
 );
 alter table public.messages drop constraint if exists messages_attachment_id_fkey;
 alter table public.messages add constraint messages_attachment_id_fkey foreign key (attachment_id) references public.attachments(id) on delete set null;
+
+create table if not exists public.call_invites (
+  id uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null references public.conversations(id) on delete cascade,
+  caller_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  endpoint text not null unique,
+  subscription jsonb not null,
+  created_at timestamptz not null default now()
+);
+create table if not exists public.vapid_keyring (
+  id smallint primary key check (id=1),
+  public_key text not null,
+  private_key text not null,
+  created_at timestamptz not null default now()
+);
 
 create or replace function public.create_contact_request(target_username text)
 returns uuid language plpgsql security definer set search_path = public, pg_temp as $$
@@ -89,6 +110,14 @@ begin
   return conv_id;
 end $$;
 
+create or replace function public.decline_contact_request(request_id uuid)
+returns void language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  update public.contact_requests set status='declined'
+    where id=request_id and receiver_id=auth.uid() and status='pending';
+  if not found then raise exception 'Request is unavailable'; end if;
+end $$;
+
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
 declare clean_name text;
@@ -102,10 +131,22 @@ end $$;
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users for each row execute procedure public.handle_new_user();
 
-create or replace function public.is_conversation_member(target_conversation uuid)
+create schema if not exists private;
+revoke all on schema private from public, anon;
+grant usage on schema private to authenticated;
+create or replace function private.is_conversation_member(target_conversation uuid)
 returns boolean language sql stable security definer set search_path = public, pg_temp as $$
   select exists(select 1 from public.conversation_members where conversation_id=target_conversation and user_id=auth.uid());
 $$;
+revoke all on function public.create_contact_request(text) from public, anon;
+revoke all on function public.accept_contact_request(uuid) from public, anon;
+revoke all on function public.decline_contact_request(uuid) from public, anon;
+revoke all on function public.handle_new_user() from public, anon, authenticated;
+revoke all on function private.is_conversation_member(uuid) from public, anon;
+grant execute on function public.create_contact_request(text) to authenticated;
+grant execute on function public.accept_contact_request(uuid) to authenticated;
+grant execute on function public.decline_contact_request(uuid) to authenticated;
+grant execute on function private.is_conversation_member(uuid) to authenticated;
 
 alter table public.profiles enable row level security;
 alter table public.contact_requests enable row level security;
@@ -114,20 +155,28 @@ alter table public.conversation_members enable row level security;
 alter table public.messages enable row level security;
 alter table public.message_reactions enable row level security;
 alter table public.attachments enable row level security;
+alter table public.call_invites enable row level security;
+alter table public.push_subscriptions enable row level security;
+alter table public.vapid_keyring enable row level security;
 
 create policy "Authenticated users can find usernames" on public.profiles for select to authenticated using (true);
 create policy "Users update own profile" on public.profiles for update to authenticated using (id=auth.uid()) with check (id=auth.uid());
 create policy "Participants view requests" on public.contact_requests for select to authenticated using (auth.uid() in (sender_id,receiver_id));
 create policy "Sender creates own request" on public.contact_requests for insert to authenticated with check (sender_id=auth.uid() and status='pending');
-create policy "Members view conversations" on public.conversations for select to authenticated using (public.is_conversation_member(id));
-create policy "Members view membership" on public.conversation_members for select to authenticated using (public.is_conversation_member(conversation_id));
-create policy "Members read messages" on public.messages for select to authenticated using (public.is_conversation_member(conversation_id));
-create policy "Members send messages as self" on public.messages for insert to authenticated with check (sender_id=auth.uid() and public.is_conversation_member(conversation_id));
-create policy "Members read reactions" on public.message_reactions for select to authenticated using (exists(select 1 from public.messages x where x.id=message_id and public.is_conversation_member(x.conversation_id)));
-create policy "Users add own reactions" on public.message_reactions for insert to authenticated with check (user_id=auth.uid() and exists(select 1 from public.messages x where x.id=message_id and public.is_conversation_member(x.conversation_id)));
+create policy "Members view conversations" on public.conversations for select to authenticated using (private.is_conversation_member(id));
+create policy "Members view membership" on public.conversation_members for select to authenticated using (private.is_conversation_member(conversation_id));
+create policy "Members read messages" on public.messages for select to authenticated using (private.is_conversation_member(conversation_id));
+create policy "Members send messages as self" on public.messages for insert to authenticated with check (sender_id=auth.uid() and private.is_conversation_member(conversation_id));
+create policy "Members read reactions" on public.message_reactions for select to authenticated using (exists(select 1 from public.messages x where x.id=message_id and private.is_conversation_member(x.conversation_id)));
+create policy "Users add own reactions" on public.message_reactions for insert to authenticated with check (user_id=auth.uid() and exists(select 1 from public.messages x where x.id=message_id and private.is_conversation_member(x.conversation_id)));
 create policy "Users remove own reactions" on public.message_reactions for delete to authenticated using (user_id=auth.uid());
-create policy "Members view attachment metadata" on public.attachments for select to authenticated using (public.is_conversation_member(conversation_id));
-create policy "Members add attachment metadata as self" on public.attachments for insert to authenticated with check (uploader_id=auth.uid() and public.is_conversation_member(conversation_id));
+create policy "Members view attachment metadata" on public.attachments for select to authenticated using (private.is_conversation_member(conversation_id));
+create policy "Members add attachment metadata as self" on public.attachments for insert to authenticated with check (uploader_id=auth.uid() and private.is_conversation_member(conversation_id));
+create policy "Members view call invites" on public.call_invites for select to authenticated using (private.is_conversation_member(conversation_id));
+create policy "Members start calls as self" on public.call_invites for insert to authenticated with check (caller_id=auth.uid() and private.is_conversation_member(conversation_id));
+create policy "Users view own push subscriptions" on public.push_subscriptions for select to authenticated using (user_id=auth.uid());
+create policy "Users add own push subscriptions" on public.push_subscriptions for insert to authenticated with check (user_id=auth.uid());
+create policy "Users remove own push subscriptions" on public.push_subscriptions for delete to authenticated using (user_id=auth.uid());
 
 grant select,update on public.profiles to authenticated;
 grant select,insert on public.contact_requests to authenticated;
@@ -135,13 +184,21 @@ grant select on public.conversations,public.conversation_members to authenticate
 grant select,insert on public.messages to authenticated;
 grant select,insert,delete on public.message_reactions to authenticated;
 grant select,insert on public.attachments to authenticated;
-grant execute on function public.create_contact_request(text) to authenticated;
-grant execute on function public.accept_contact_request(uuid) to authenticated;
-grant execute on function public.is_conversation_member(uuid) to authenticated;
+grant select,insert on public.call_invites to authenticated;
+grant select,insert,delete on public.push_subscriptions to authenticated;
+revoke all on public.vapid_keyring from public, anon, authenticated;
+grant select,insert,update on public.vapid_keyring to service_role;
 
 do $$ begin
-  alter publication supabase_realtime add table public.messages;
-exception when duplicate_object then null; when undefined_object then null; end $$;
+  begin alter publication supabase_realtime add table public.messages;
+  exception when duplicate_object then null; when undefined_object then null; end;
+  begin alter publication supabase_realtime add table public.contact_requests;
+  exception when duplicate_object then null; when undefined_object then null; end;
+  begin alter publication supabase_realtime add table public.attachments;
+  exception when duplicate_object then null; when undefined_object then null; end;
+  begin alter publication supabase_realtime add table public.call_invites;
+  exception when duplicate_object then null; when undefined_object then null; end;
+end $$;
 
 insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
 values('profile-avatars','profile-avatars',false,524288,array['image/jpeg','image/png','image/webp','image/gif'])
