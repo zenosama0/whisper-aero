@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://zenosama0.github.io/whisper-aero/sitemap.xml

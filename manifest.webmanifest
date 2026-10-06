@@ -1,0 +1,1 @@
+{"name":"Whisper Messenger","short_name":"Whisper","description":"Private, thoughtful conversations.","start_url":"./","scope":"./","display":"standalone","background_color":"#e9f2f5","theme_color":"#d8edf3","icons":[{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
