@@ -1,11 +1,11 @@
-const CACHE = 'whisper-shell-v6';
+const CACHE = 'whisper-shell-v7';
 const FILES = [
   './',
   './index.html',
-  './styles.css',
-  './auth.css',
-  './overrides.css',
-  './app.js',
+  './styles.css?v=7',
+  './auth.css?v=7',
+  './overrides.css?v=7',
+  './app.js?v=7',
   './app-config.js',
   './manifest.webmanifest',
   './icon.svg',
@@ -40,7 +40,6 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Network-first for all same-origin shell files so updates on GitHub Pages apply immediately.
   event.respondWith(
     fetch(event.request)
       .then((response) => {

@@ -1,4 +1,4 @@
-/* Keep the conversation workspace flush with the viewport on desktop and mobile. */
+/* Whisper Aero — Polished Workspace & Component Styles */
 html,
 body {
   width: 100%;
@@ -8,6 +8,8 @@ body {
 
 body {
   overflow: hidden;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
 }
 
 .app-shell {
@@ -31,7 +33,325 @@ body {
   }
 }
 
-/* Keep controls readable against dark surfaces. */
+/* Global focus-visible & interactive alignment */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid #5d9b84;
+  outline-offset: 2px;
+}
+
+.icon-btn,
+.new-chat,
+.rail-btn,
+.attach-btn,
+.emoji-btn,
+.send-btn,
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, transform 0.08s;
+}
+
+.send-btn:active,
+.primary-btn:active {
+  transform: translateY(1px);
+}
+
+/* Improved typography scale & contrast (Light / Aero) */
+.topbar {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(235, 246, 250, 0.92));
+  backdrop-filter: blur(12px);
+}
+
+.window-title {
+  font-size: 12.5px;
+  color: #5b6d72;
+}
+
+.profile-chip {
+  font-size: 13px;
+  font-weight: 500;
+  padding: 4px 10px 4px 5px;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.profile-chip:hover {
+  background: #f2f8f7;
+  border-color: #c8dcd7;
+}
+
+.rail {
+  width: 72px;
+  padding: 14px 0 12px;
+}
+
+.rail-btn {
+  width: 54px;
+  height: 52px;
+  gap: 3px;
+  color: #627479;
+}
+
+.rail-btn small {
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.eyebrow,
+.section-label,
+.detail-label {
+  font-size: 10.5px;
+  letter-spacing: 1.1px;
+  color: #64777b;
+}
+
+.sidebar h1 {
+  font-size: 22px;
+}
+
+.searchbox {
+  height: 40px;
+  border-radius: 10px;
+  color: #607276;
+}
+
+.searchbox input {
+  font-size: 13px;
+}
+
+.filter {
+  padding: 6px 13px;
+  font-size: 12px;
+  color: #56686e;
+  font-weight: 500;
+}
+
+.chat-item {
+  padding: 12px 16px;
+}
+
+.chat-name {
+  font-size: 14px;
+  color: #203137;
+}
+
+.chat-time {
+  font-size: 11px;
+  color: #64757a;
+}
+
+.chat-preview {
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: #5e7074;
+}
+
+.empty-list {
+  padding: 28px 18px;
+  text-align: center;
+  font-size: 13px;
+  color: #5e7074;
+}
+
+.sidebar-foot {
+  font-size: 11px;
+  color: #5e7074;
+}
+
+.empty-state h2 {
+  font-size: 26px;
+}
+
+.empty-state p {
+  font-size: 14px;
+  color: #5b6d72;
+}
+
+.primary-btn {
+  padding: 11px 18px;
+  font-size: 13px;
+  border-radius: 10px;
+}
+
+.secondary-btn {
+  padding: 9px 15px;
+  font-size: 12.5px;
+  border-radius: 9px;
+}
+
+.encryption-note {
+  font-size: 11.5px;
+  color: #64767a;
+}
+
+.peer-name {
+  font-size: 15px;
+  color: #1f3036;
+}
+
+.peer-status {
+  font-size: 11.5px;
+  color: #5b6d72;
+}
+
+.chat-banner {
+  font-size: 11.5px;
+  color: #5b6d72;
+  padding: 8px 12px;
+  border-bottom: 1px solid #ecf1ef;
+}
+
+.messages {
+  padding: 36px clamp(16px, 4.5vw, 72px) 22px;
+}
+
+.day-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5e7074;
+  padding: 5px 12px;
+}
+
+.message-bubble {
+  padding: 10px 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #223238;
+}
+
+.mine .message-bubble {
+  background: #dff0e6;
+  color: #1d352a;
+}
+
+.message-meta {
+  font-size: 10.5px;
+  color: #647579;
+}
+
+.message-tools {
+  top: -32px;
+  padding: 2px;
+  gap: 1px;
+}
+
+.message-tools button {
+  padding: 5px 7px;
+  border-radius: 6px;
+  color: #506360;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.message-tools button:hover {
+  background: #f0f6f4;
+  color: #27483e;
+}
+
+.reaction-chip {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.compose-input {
+  min-height: 44px;
+  padding: 8px 10px 8px 14px;
+}
+
+.compose-input textarea {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.send-btn {
+  width: 42px;
+  height: 42px;
+}
+
+.attach-btn,
+.view-once-btn {
+  height: 42px;
+}
+
+.composer-hint {
+  font-size: 10.5px;
+  color: #6a7b79;
+}
+
+.typing {
+  font-size: 11.5px;
+  color: #5b6d72;
+}
+
+.details h3 {
+  font-size: 16px;
+}
+
+.details > p {
+  font-size: 12.5px;
+  color: #5b6d72;
+}
+
+.outline-btn {
+  font-size: 12.5px;
+  padding: 10px 12px;
+}
+
+.modal h2 {
+  font-size: 20px;
+}
+
+.modal p {
+  font-size: 13px;
+  color: #5b6d72;
+}
+
+.modal .field-label {
+  font-size: 12px;
+  color: #3d5256;
+}
+
+.modal .field {
+  font-size: 13.5px;
+}
+
+.modal .field-help {
+  font-size: 11px;
+  color: #64767a;
+}
+
+.request-person strong {
+  font-size: 13px;
+}
+
+.request-person small {
+  font-size: 11.5px;
+  color: #5e7074;
+}
+
+.request-card button {
+  font-size: 12px;
+  padding: 8px 12px;
+}
+
+.settings-row {
+  font-size: 13px;
+}
+
+.settings-row small {
+  font-size: 11.5px;
+  color: #5e7074;
+}
+
+.toast {
+  font-size: 13px;
+}
+
+/* Dark theme overrides */
 body.dark {
   color-scheme: dark;
 }
@@ -48,7 +368,7 @@ body.dark .compose-input {
 body.dark .field::placeholder,
 body.dark .searchbox input::placeholder,
 body.dark .compose-input textarea::placeholder {
-  color: #a5b4b0;
+  color: #9cb0aa;
 }
 
 body.dark .searchbox input,
@@ -86,6 +406,10 @@ body.dark .rail {
   border-color: #34413e;
 }
 
+body.dark .rail-btn {
+  color: #9fb1ab;
+}
+
 body.dark .rail-btn:hover,
 body.dark .rail-btn.selected,
 body.dark .chat-item:hover,
@@ -100,6 +424,24 @@ body.dark .filter {
   background: #2a3834;
 }
 
+body.dark .chat-name,
+body.dark .peer-name {
+  color: #e9f1ef;
+}
+
+body.dark .chat-preview,
+body.dark .peer-status,
+body.dark .window-title,
+body.dark .eyebrow,
+body.dark .section-label,
+body.dark .detail-label,
+body.dark .sidebar-foot,
+body.dark .empty-list,
+body.dark .composer-hint,
+body.dark .message-meta {
+  color: #9fb1ab;
+}
+
 body.dark .day-label,
 body.dark .bubble,
 body.dark .message-tools,
@@ -107,6 +449,11 @@ body.dark .emoji-pop {
   color: #e5eeeb;
   background: #293633;
   border-color: #40504b;
+}
+
+body.dark .message-tools button:hover {
+  background: #344640;
+  color: #fff;
 }
 
 body.dark .message-tools button,
@@ -152,6 +499,7 @@ body.dark .send-btn {
 body.dark .chat-banner {
   color: #b3c2bd;
   background: #202b29;
+  border-color: #2d3b38;
 }
 
 body.dark .profile-chip {
@@ -167,7 +515,7 @@ body.dark .request-card {
 
 /* People search & request tabs */
 .people-results {
-  margin-top: 11px;
+  margin-top: 12px;
   max-height: min(52vh, 390px);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -176,15 +524,15 @@ body.dark .request-card {
 .people-card {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
   min-width: 0;
-  padding: 10px 0;
+  padding: 11px 0;
   border-top: 1px solid var(--line);
 }
 
 .people-card .avatar {
-  width: 40px;
-  height: 40px;
+  width: 42px;
+  height: 42px;
 }
 
 .people-card .request-person {
@@ -203,11 +551,11 @@ body.dark .request-card {
 .people-action {
   flex: none;
   border: 0;
-  border-radius: 7px;
-  padding: 8px 10px;
+  border-radius: 8px;
+  padding: 8px 12px;
   background: #e8f2ed;
-  color: #477e68;
-  font-size: 10px;
+  color: #3d7660;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -216,19 +564,19 @@ body.dark .request-card {
 }
 
 .people-action.accept {
-  background: #71a58e;
+  background: #6fa591;
   color: #fff;
 }
 
 .people-action:disabled {
   cursor: wait;
-  opacity: .6;
+  opacity: 0.6;
 }
 
 .people-status,
 .people-empty {
-  color: var(--muted);
-  font-size: 10px;
+  color: #5e7074;
+  font-size: 12.5px;
 }
 
 .people-status {
@@ -237,7 +585,7 @@ body.dark .request-card {
 }
 
 .people-empty {
-  padding: 17px 3px;
+  padding: 18px 4px;
   text-align: center;
 }
 
@@ -247,24 +595,24 @@ body.dark .request-card {
 
 .modal-tabs {
   display: flex;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .modal-tab {
   flex: 1;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px 10px;
+  border-radius: 9px;
+  padding: 9px 12px;
   background: var(--surface);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--muted);
+  color: #5b6d72;
 }
 
 .modal-tab.active {
   background: #e6f2ee;
-  color: #3f7b65;
+  color: #36715c;
   border-color: #b7d7ca;
 }
 
@@ -278,22 +626,22 @@ body.dark .request-card {
   position: absolute;
   right: 0;
   bottom: 0;
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
-  background: #43b581;
+  background: #3fb980;
   border: 2px solid var(--panel);
 }
 
 .unread-badge {
   flex: none;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
   border-radius: 999px;
   background: #6fa591;
   color: #fff;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   display: grid;
   place-items: center;
@@ -304,15 +652,15 @@ body.dark .request-card {
   height: auto;
   min-width: 0;
   padding: 0;
-  font-size: 8px;
+  font-size: 9.5px;
   font-weight: 700;
   color: #fff;
   line-height: 1;
 }
 
 .rail-count.has-count {
-  min-width: 15px;
-  height: 15px;
+  min-width: 16px;
+  height: 16px;
   padding: 0 4px;
   display: grid;
   place-items: center;
@@ -322,7 +670,7 @@ body.dark .request-card {
 /* Message interactions: reactions, reply quotes, edit/delete, search */
 .reaction-picker-pop {
   position: absolute;
-  top: -36px;
+  top: -40px;
   right: 0;
   z-index: 8;
   display: flex;
@@ -338,7 +686,7 @@ body.dark .request-card {
   border: 0;
   background: none;
   padding: 4px;
-  font-size: 16px;
+  font-size: 17px;
   border-radius: 6px;
 }
 
@@ -354,14 +702,14 @@ body.dark .request-card {
   border-left: 3px solid #6fa591;
   background: rgba(111, 165, 145, 0.12);
   border-radius: 6px;
-  padding: 5px 8px;
+  padding: 6px 9px;
   margin-bottom: 6px;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .reply-quote strong {
   display: block;
-  color: #467d67;
+  color: #3d7560;
   margin-bottom: 2px;
 }
 
@@ -386,7 +734,7 @@ body.dark .request-card {
   padding: 8px 18px;
   background: #f2f8f5;
   border-top: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .compose-ctx-text {
@@ -397,12 +745,12 @@ body.dark .request-card {
 
 .compose-ctx-text strong {
   display: block;
-  color: #477d67;
+  color: #3d7560;
 }
 
 .compose-ctx-text span {
   display: block;
-  color: var(--muted);
+  color: #5b6d72;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -411,18 +759,17 @@ body.dark .request-card {
 .compose-ctx-close {
   border: 0;
   background: none;
-  font-size: 18px;
-  color: var(--muted);
+  font-size: 19px;
+  color: #5b6d72;
 }
 
 .view-once-btn {
-  width: 32px;
-  height: 40px;
-  border: 1px solid var(--line);
+  width: 36px;
+  border: 1px solid #d5e2dd;
   border-radius: 10px;
   background: var(--surface);
-  color: var(--muted);
-  font-size: 11px;
+  color: #5b6d72;
+  font-size: 12px;
   font-weight: 700;
   flex: none;
 }
@@ -447,26 +794,26 @@ body.dark .request-card {
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 11px;
+  padding: 7px 11px;
+  font-size: 13px;
   background: var(--surface);
   color: var(--ink);
   outline: 0;
 }
 
 .chat-search-count {
-  font-size: 10px;
-  color: var(--muted);
-  min-width: 34px;
+  font-size: 11.5px;
+  color: #5b6d72;
+  min-width: 38px;
   text-align: center;
 }
 
 .chat-search-bar button {
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 7px;
   background: var(--surface);
-  padding: 4px 8px;
-  font-size: 11px;
+  padding: 5px 9px;
+  font-size: 12.5px;
 }
 
 mark.search-hit {
@@ -483,16 +830,16 @@ mark.search-hit {
 .load-more-wrap {
   display: flex;
   justify-content: center;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 /* Persistent media, lightbox, shared media grid */
 .attachment-image,
 .attachment-video {
   display: block;
-  max-width: min(260px, 60vw);
-  max-height: 220px;
-  border-radius: 9px;
+  max-width: min(280px, 62vw);
+  max-height: 240px;
+  border-radius: 10px;
   margin-bottom: 4px;
 }
 
@@ -504,8 +851,8 @@ mark.search-hit {
   padding: 12px 14px;
   border-radius: 8px;
   background: rgba(111, 165, 145, 0.08);
-  font-size: 10px;
-  color: var(--muted);
+  font-size: 12px;
+  color: #5b6d72;
 }
 
 .shared-grid {
@@ -524,8 +871,8 @@ mark.search-hit {
   background-position: center;
   display: grid;
   place-items: center;
-  font-size: 14px;
-  color: var(--muted);
+  font-size: 15px;
+  color: #5b6d72;
 }
 
 .lightbox-wrap {
@@ -547,7 +894,7 @@ mark.search-hit {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 .detail-danger-actions {
@@ -566,12 +913,12 @@ mark.search-hit {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 9px 12px;
   border: 1px dashed #7aa894;
   border-radius: 10px;
   background: rgba(111, 165, 145, 0.1);
   text-align: left;
-  min-width: 185px;
+  min-width: 200px;
 }
 
 .view-once-card.incoming:hover {
@@ -584,12 +931,12 @@ mark.search-hit {
 }
 
 .view-once-card > span {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: #6fa591;
   color: #fff;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   display: grid;
   place-items: center;
@@ -598,13 +945,13 @@ mark.search-hit {
 
 .view-once-card strong {
   display: block;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .view-once-card small {
   display: block;
-  font-size: 9px;
-  color: var(--muted);
+  font-size: 11px;
+  color: #5e7074;
 }
 
 .vo-viewer-head {
@@ -612,15 +959,15 @@ mark.search-hit {
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
-  font-size: 12px;
+  font-size: 13.5px;
 }
 
 .vo-badge {
-  padding: 3px 8px;
+  padding: 3px 9px;
   border-radius: 999px;
   background: #6fa591;
   color: #fff;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -656,7 +1003,7 @@ mark.search-hit {
   margin: 0;
   padding: 16px;
   color: #e5eeeb;
-  font-size: 11px;
+  font-size: 13px;
   white-space: pre-wrap;
   max-height: 55vh;
   overflow: auto;
@@ -669,7 +1016,7 @@ mark.search-hit {
   pointer-events: none;
   display: grid;
   place-items: center;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.6px;
   color: rgba(255, 255, 255, 0.22);
@@ -706,18 +1053,17 @@ mark.search-hit {
 
 .vo-note {
   margin: 10px 0 0 !important;
-  font-size: 9px !important;
+  font-size: 11px !important;
 }
 
 .help-ok {
-  color: #3f7b65 !important;
+  color: #3b7b65 !important;
 }
 
 .help-err {
   color: #b64f49 !important;
 }
 
-/* Dark-mode additions for new components */
 body.dark .people-card,
 body.dark .compose-context,
 body.dark .chat-search-bar {
@@ -779,23 +1125,23 @@ body.dark .danger-btn {
   border-color: #5c3a37 !important;
 }
 
-.auth-forgot-link {
-  display: block;
-  margin: 6px 0 0 auto;
-  border: 0;
-  background: none;
-  padding: 2px 0;
-  font-size: 10px;
-  color: #4b927a;
-  font-weight: 600;
-}
+@media (max-width: 700px) {
+  .rail {
+    width: 58px;
+  }
 
-.auth-forgot-link:hover {
-  text-decoration: underline;
-}
+  .rail-btn {
+    width: 46px;
+    height: 48px;
+  }
 
-body.dark .auth-forgot-link {
-  color: #8fd1b5;
+  .sidebar {
+    width: calc(100% - 58px);
+  }
+
+  .conversation {
+    inset: 0 0 0 58px;
+  }
 }
 
 @media (max-width: 480px) {
