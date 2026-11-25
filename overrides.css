@@ -779,6 +779,25 @@ body.dark .danger-btn {
   border-color: #5c3a37 !important;
 }
 
+.auth-forgot-link {
+  display: block;
+  margin: 6px 0 0 auto;
+  border: 0;
+  background: none;
+  padding: 2px 0;
+  font-size: 10px;
+  color: #4b927a;
+  font-weight: 600;
+}
+
+.auth-forgot-link:hover {
+  text-decoration: underline;
+}
+
+body.dark .auth-forgot-link {
+  color: #8fd1b5;
+}
+
 @media (max-width: 480px) {
   .modal-card {
     max-height: calc(100dvh - 28px);

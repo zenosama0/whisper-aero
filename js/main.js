@@ -33,6 +33,7 @@ import {
 } from './utils.js';
 
 let authMode = 'login';
+let isRecoveryFlow = window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery');
 let activeUserId = null;
 let refreshPromise = null;
 const typingTimers = new Map();
@@ -62,16 +63,43 @@ function showAuth(mode = 'login') {
   document.body.classList.remove('authenticated');
   appShell.style.display = 'none';
   authGate.classList.remove('hidden');
-  $('#auth-title').textContent = mode === 'signup' ? 'Create your account' : 'Welcome back';
-  $('#auth-description').textContent = mode === 'signup'
-    ? 'A few details, then you can start chatting.'
-    : 'Sign in to pick up where your conversations left off.';
+
+  const titles = {
+    login: 'Welcome back',
+    signup: 'Create your account',
+    reset: 'Reset your password',
+    recovery: 'Set a new password',
+  };
+  const descriptions = {
+    login: 'Sign in to pick up where your conversations left off.',
+    signup: 'A few details, then you can start chatting.',
+    reset: 'Enter your account email and we will send a reset link.',
+    recovery: 'Choose a new password with at least 8 characters.',
+  };
+  const submits = {
+    login: 'Sign in',
+    signup: 'Create account',
+    reset: 'Send reset link',
+    recovery: 'Update password',
+  };
+
+  $('#auth-title').textContent = titles[mode] || titles.login;
+  $('#auth-description').textContent = descriptions[mode] || descriptions.login;
   $('#auth-signup-fields').classList.toggle('hidden', mode !== 'signup');
-  $('#auth-password').autocomplete = mode === 'signup' ? 'new-password' : 'current-password';
-  $('#auth-submit').textContent = mode === 'signup' ? 'Create account' : 'Sign in';
-  $('#auth-switch').innerHTML = mode === 'signup'
-    ? 'Already have an account? <b>Sign in</b>'
-    : 'New to Whisper? <b>Create an account</b>';
+  $('#auth-email-field')?.classList.toggle('hidden', mode === 'recovery');
+  $('#auth-password-field')?.classList.toggle('hidden', mode === 'reset');
+  $('#auth-confirm-field')?.classList.toggle('hidden', mode !== 'recovery');
+  $('#auth-forgot')?.classList.toggle('hidden', mode !== 'login');
+
+  const pwLabel = $('label[for="auth-password"]');
+  if (pwLabel) pwLabel.textContent = mode === 'recovery' ? 'New password' : 'Password';
+  $('#auth-password').autocomplete = mode === 'signup' || mode === 'recovery' ? 'new-password' : 'current-password';
+  $('#auth-submit').textContent = submits[mode] || submits.login;
+  $('#auth-switch').innerHTML = mode === 'login'
+    ? 'New to Whisper? <b>Create an account</b>'
+    : mode === 'signup'
+      ? 'Already have an account? <b>Sign in</b>'
+      : 'Remembered your password? <b>Back to Sign in</b>';
   authNotice('');
 }
 
@@ -424,6 +452,7 @@ function wireEvents() {
   });
 
   $('#auth-switch').onclick = () => showAuth(authMode === 'login' ? 'signup' : 'login');
+  $('#auth-forgot')?.addEventListener('click', () => showAuth('reset'));
 
   let usernameCheckTimer = 0;
   $('#auth-username')?.addEventListener('input', (e) => {
@@ -450,7 +479,25 @@ function wireEvents() {
     const password = $('#auth-password').value;
     $('#auth-submit').disabled = true;
     try {
-      if (authMode === 'signup') {
+      if (authMode === 'reset') {
+        if (!email) throw new Error('Enter your email address.');
+        const { error } = await api.requestPasswordReset(email);
+        if (error) throw error;
+        authNotice('Password reset link sent. Check your email inbox (and spam folder).');
+      } else if (authMode === 'recovery') {
+        const confirmPw = $('#auth-password-confirm')?.value || '';
+        if (password.length < 8) throw new Error('Choose a password with at least 8 characters.');
+        if (password !== confirmPw) throw new Error('Passwords do not match.');
+        const { data, error } = await api.updatePassword(password);
+        if (error) throw error;
+        isRecoveryFlow = false;
+        history.replaceState(null, '', window.location.pathname);
+        $('#auth-password').value = '';
+        if ($('#auth-password-confirm')) $('#auth-password-confirm').value = '';
+        showToast('Password updated!');
+        if (data?.user) await enterCloud(data.user);
+        else showAuth('login');
+      } else if (authMode === 'signup') {
         const username = $('#auth-username').value.trim().replace(/^@/, '').toLowerCase();
         const displayName = $('#auth-display-name').value.trim();
         if (!/^[a-z0-9_]{3,24}$/.test(username)) {
@@ -666,23 +713,32 @@ async function bootstrap() {
   }
 
   appShell.style.display = 'none';
-  showAuth('login');
+  showAuth(isRecoveryFlow ? 'recovery' : 'login');
 
   api.onAuthStateChange((event, session) => {
-    if (event === 'SIGNED_OUT') {
+    if (event === 'PASSWORD_RECOVERY') {
+      isRecoveryFlow = true;
+      showAuth('recovery');
+    } else if (event === 'SIGNED_OUT') {
       stopRealtime();
       activeUserId = null;
+      isRecoveryFlow = false;
       resetState();
       showAuth('login');
     } else if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
-      enterCloud(session.user);
+      if (isRecoveryFlow) showAuth('recovery');
+      else enterCloud(session.user);
     }
   });
 
   try {
     const { data, error } = await api.getSession();
     if (error) throw error;
-    if (data.session?.user) await enterCloud(data.session.user);
+    if (isRecoveryFlow) {
+      showAuth('recovery');
+    } else if (data.session?.user) {
+      await enterCloud(data.session.user);
+    }
   } catch (error) {
     authNotice(error.message || 'Could not connect to the account service.', true);
   }
