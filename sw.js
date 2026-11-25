@@ -1,1 +1,86 @@
-const CACHE='whisper-shell-v5';const FILES=['./','./index.html','./styles.css','./auth.css','./overrides.css','./app.js','./backend.js','./app-config.js','./manifest.webmanifest','./icon.svg'];self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting())));self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('whisper-shell-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));self.addEventListener('fetch',e=>{if(e.request.method==='GET'&&new URL(e.request.url).origin===location.origin)e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(response=>{if(response.ok){const copy=response.clone();caches.open(CACHE).then(c=>c.put(e.request,copy))}return response}).catch(()=>caches.match('./index.html'))))});self.addEventListener('push',e=>{let data={};try{data=e.data?.json()||{}}catch{};e.waitUntil(self.registration.showNotification(data.title||'Whisper',{body:data.body||'You have a new notification.',icon:'./icon.svg',badge:'./icon.svg',tag:data.tag||'whisper',renotify:true,vibrate:data.vibrate||[120],data:{url:data.url||'./'}}))});self.addEventListener('notificationclick',e=>{e.notification.close();const target=new URL(e.notification.data?.url||'./',self.location.origin).href;e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(cs=>{const client=cs.find(c=>new URL(c.url).origin===self.location.origin);return client?(client.navigate(target),client.focus()):self.clients.openWindow(target)}))});
+const CACHE = 'whisper-shell-v6';
+const FILES = [
+  './',
+  './index.html',
+  './styles.css',
+  './auth.css',
+  './overrides.css',
+  './app.js',
+  './app-config.js',
+  './manifest.webmanifest',
+  './icon.svg',
+  './js/config.js',
+  './js/utils.js',
+  './js/state.js',
+  './js/api.js',
+  './js/realtime.js',
+  './js/viewOnce.js',
+  './js/ui/chat.js',
+  './js/ui/modals.js',
+  './js/main.js',
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE).then((cache) => cache.addAll(FILES)).then(() => self.skipWaiting()),
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches
+      .keys()
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('whisper-shell-') && k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim()),
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+
+  // Network-first for all same-origin shell files so updates on GitHub Pages apply immediately.
+  event.respondWith(
+    fetch(event.request)
+      .then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(event.request, copy));
+        }
+        return response;
+      })
+      .catch(() => caches.match(event.request).then((cached) => cached || caches.match('./index.html'))),
+  );
+});
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data?.json() || {};
+  } catch {
+    data = {};
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'Whisper', {
+      body: data.body || 'You have a new notification.',
+      icon: './icon.svg',
+      badge: './icon.svg',
+      tag: data.tag || 'whisper',
+      renotify: true,
+      vibrate: data.vibrate || [120],
+      data: { url: data.url || './' },
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || './', self.location.origin).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      const client = clients.find((c) => new URL(c.url).origin === self.location.origin);
+      return client ? (client.navigate(target), client.focus()) : self.clients.openWindow(target);
+    }),
+  );
+});
