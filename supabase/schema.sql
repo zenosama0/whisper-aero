@@ -34,7 +34,7 @@ create table if not exists public.conversations (
   dm_key text,
   created_at timestamptz not null default now()
 );
-create unique index if not exists conversations_dm_key_uidx on public.conversations(dm_key) where dm_key is not null;
+create unique index if not exists conversations_dm_key_uidx on public.conversations(dm_key);
 
 create table if not exists public.conversation_members (
   conversation_id uuid not null references public.conversations(id) on delete cascade,
