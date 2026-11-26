@@ -5,7 +5,7 @@ import {
   isNativeAndroid,
   nativeCopyText,
   nativeShareText,
-} from '../native.js?v=24';
+} from '../native.js?v=25';
 import {
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,
@@ -92,7 +92,7 @@ export function renderChats() {
                   <span class="chat-time">${esc(m?.time || '')}</span>
                 </div>
                 <div class="chat-row">
-                  <span class="chat-preview">${c.favorite ? '★ ' : ''}${preview}</span>
+                  <span class="chat-preview">${c.muted ? '🔇 ' : ''}${c.favorite ? '★ ' : ''}${preview}</span>
                   ${c.unread > 0 ? `<span class="unread-badge">${c.unread > 99 ? '99+' : c.unread}</span>` : ''}
                 </div>
               </div>

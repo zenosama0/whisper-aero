@@ -1,17 +1,18 @@
 import { config, configured, supabase } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=24';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=25';
 import {
   clearNativeSession,
   isBubbleWindow,
   isNativeAndroid,
   isNativeApp,
+  openNativeChatBubble,
   pushNativeChatShortcuts,
   sendNativeNotification,
   startNativeGoogleSignIn,
   syncNativeSession,
   syncNativeTheme,
-} from './native.js?v=24';
+} from './native.js?v=25';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
@@ -50,6 +51,7 @@ import {
   consumePopLayer,
   esc,
   formatTime,
+  haptic,
   initials,
   playNotificationChime,
   popUiLayer,
@@ -91,6 +93,170 @@ function applyChatTheme(theme = state.chatTheme) {
   document.body.classList.toggle('has-custom-chat-bg', Boolean(t.bgImage));
   document.body.classList.toggle('has-custom-mine-bubble', Boolean(t.mineBg));
   document.body.classList.toggle('has-custom-theirs-bubble', Boolean(t.theirsBg));
+}
+
+function closeChatMoreMenu(fromPop = false) {
+  const existing = document.querySelector('.chat-more-backdrop');
+  if (!existing) return;
+  existing.remove();
+  if (!fromPop) popUiLayer();
+}
+
+function openChatMoreMenu(anchorEl) {
+  const c = getActiveChat();
+  if (!c) return;
+  if (document.querySelector('.chat-more-backdrop')) {
+    closeChatMoreMenu();
+    return;
+  }
+
+  const wasInputFocused = document.activeElement === $('#message-input');
+  const restoreKeyboardIfNeeded = () => {
+    if (wasInputFocused && document.activeElement !== $('#message-input')) {
+      $('#message-input')?.focus({ preventScroll: true });
+    }
+  };
+
+  pushUiLayer('chat-menu');
+  const backdrop = document.createElement('div');
+  backdrop.className = 'chat-more-backdrop';
+  backdrop.addEventListener('pointerdown', (e) => e.preventDefault());
+  backdrop.addEventListener('mousedown', (e) => e.preventDefault());
+
+  const showBubbleBtn = isNativeAndroid() && !isBubbleWindow();
+  const menu = document.createElement('div');
+  menu.className = 'chat-more-menu';
+  menu.setAttribute('role', 'menu');
+  menu.addEventListener('pointerdown', (e) => e.preventDefault());
+  menu.addEventListener('mousedown', (e) => e.preventDefault());
+  menu.innerHTML = `
+    ${showBubbleBtn ? `
+      <button type="button" data-chat-more="bubble" role="menuitem">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><circle cx="17" cy="7" r="3" fill="currentColor"/></svg>
+        <span>Pop out bubble</span>
+      </button>
+    ` : ''}
+    <button type="button" data-chat-more="mute" role="menuitem">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${c.muted ? '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>' : '<path d="M8.56 2.9A7 7 0 0 1 19 9v4m-2 4H2a3 3 0 0 0 2-2.8V9a7 7 0 0 1 .78-3.22"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="2" x2="22" y1="2" y2="22"/>'}</svg>
+      <span>${c.muted ? 'Unmute notifications' : 'Mute notifications'}</span>
+    </button>
+    <button type="button" data-chat-more="favorite" role="menuitem">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="${c.favorite ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+      <span>${c.favorite ? 'Remove favorite' : 'Add to favorites'}</span>
+    </button>
+    <button type="button" data-chat-more="search" role="menuitem">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      <span>Search in chat</span>
+    </button>
+    <button type="button" data-chat-more="theme" role="menuitem">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+      <span>Chat theme</span>
+    </button>
+    <button type="button" data-chat-more="profile" role="menuitem">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      <span>View profile</span>
+    </button>
+  `;
+
+  backdrop.append(menu);
+  document.body.append(backdrop);
+
+  const anchor = anchorEl?.getBoundingClientRect?.() || { right: window.innerWidth - 12, bottom: 56 };
+  const rect = menu.getBoundingClientRect();
+  const vv = window.visualViewport;
+  const viewBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+  const top = Math.min(viewBottom - rect.height - 10, Math.max(8, Math.round(anchor.bottom + 6)));
+  const left = Math.max(10, Math.min(window.innerWidth - rect.width - 10, Math.round(anchor.right - rect.width)));
+  menu.style.top = `${top}px`;
+  menu.style.left = `${left}px`;
+
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      closeChatMoreMenu();
+      document.removeEventListener('keydown', onKey);
+      restoreKeyboardIfNeeded();
+    }
+  };
+  document.addEventListener('keydown', onKey);
+
+  let dismissed = false;
+  const dismiss = (e) => {
+    if (e.target !== backdrop || dismissed) return;
+    dismissed = true;
+    if (e.cancelable) e.preventDefault();
+    e.stopPropagation();
+    closeChatMoreMenu();
+    document.removeEventListener('keydown', onKey);
+    restoreKeyboardIfNeeded();
+  };
+  backdrop.addEventListener('touchend', dismiss, { passive: false });
+  backdrop.addEventListener('click', dismiss);
+
+  menu.querySelectorAll('[data-chat-more]').forEach((btn) => {
+    let ran = false;
+    const handleAction = async (e) => {
+      if (ran) return;
+      ran = true;
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+      const action = btn.dataset.chatMore;
+      haptic(10);
+      closeChatMoreMenu();
+      document.removeEventListener('keydown', onKey);
+
+      if (action === 'bubble') {
+        const ok = openNativeChatBubble(c);
+        showToast(ok ? 'Opening floating chat bubble…' : 'Enable Bubbles for Whisper in Android settings');
+        restoreKeyboardIfNeeded();
+      } else if (action === 'mute') {
+        const nextMuted = !c.muted;
+        c.muted = nextMuted;
+        renderChats();
+        pushNativeSession();
+        showToast(nextMuted ? `Muted ${c.name}` : `Unmuted ${c.name}`);
+        restoreKeyboardIfNeeded();
+        try {
+          await api.setConversationMuted(c.id, state.user.id, nextMuted);
+        } catch (error) {
+          c.muted = !nextMuted;
+          renderChats();
+          pushNativeSession();
+          showToast(error.message || 'Could not update mute setting');
+        }
+      } else if (action === 'favorite') {
+        const nextFav = !c.favorite;
+        c.favorite = nextFav;
+        updatePeerHeader();
+        renderChats();
+        showToast(nextFav ? `Added ${c.name} to favorites` : `Removed ${c.name} from favorites`);
+        restoreKeyboardIfNeeded();
+        try {
+          await api.setConversationFavorite(c.id, state.user.id, nextFav);
+        } catch (error) {
+          c.favorite = !nextFav;
+          updatePeerHeader();
+          renderChats();
+          showToast(error.message || 'Could not update favorite');
+        }
+      } else if (action === 'search') {
+        openChatSearch();
+        if (window.innerWidth <= 700) pushUiLayer('search');
+      } else if (action === 'theme') {
+        openSettingsPage({
+          onThemeChange: setTheme,
+          onChatThemeChange: () => applyChatTheme(),
+          onSignOut: handleSignOut,
+        });
+        setTimeout(() => {
+          document.getElementById('chat-theme-preview')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 60);
+      } else if (action === 'profile') {
+        openDetailsPanel();
+      }
+    };
+    btn.addEventListener('touchend', handleAction, { passive: false });
+    btn.addEventListener('click', handleAction);
+  });
 }
 
 function openDetailsPanel() {
@@ -243,6 +409,7 @@ async function pushNativeSession(providedSession = null) {
         peerId: c.peerId || '',
         name: c.name || 'Whisper',
         avatar: c.avatar || '',
+        muted: Boolean(c.muted),
       })),
     });
     pushNativeChatShortcuts(state.chats);
@@ -387,23 +554,25 @@ async function handleMessageRealtime(payload) {
         });
       } else {
         chat.unread = (chat.unread || 0) + 1;
-        playNotificationChime(state.soundEnabled, 'message');
-        if (document.visibilityState === 'hidden') {
-          const preview = msg.file ? `Sent ${msg.file.name}` : msg.text;
-          const handledNative = sendNativeNotification({
-            conversationId: chat.id,
-            title: chat.name,
-            body: preview,
-            icon: chat.avatar || '',
-            tag: `whisper-msg-${chat.id}`,
-            messageId: msg.id,
-          });
-          if (!handledNative && 'Notification' in window && Notification.permission === 'granted') {
-            new Notification(chat.name, {
+        if (!chat.muted) {
+          playNotificationChime(state.soundEnabled, 'message');
+          if (document.visibilityState === 'hidden') {
+            const preview = msg.file ? `Sent ${msg.file.name}` : msg.text;
+            const handledNative = sendNativeNotification({
+              conversationId: chat.id,
+              title: chat.name,
               body: preview,
-              icon: chat.avatar || './icon-192.png',
+              icon: chat.avatar || '',
               tag: `whisper-msg-${chat.id}`,
+              messageId: msg.id,
             });
+            if (!handledNative && 'Notification' in window && Notification.permission === 'granted') {
+              new Notification(chat.name, {
+                body: preview,
+                icon: chat.avatar || './icon-192.png',
+                tag: `whisper-msg-${chat.id}`,
+              });
+            }
           }
         }
       }
@@ -1112,10 +1281,20 @@ function wireEvents() {
   };
   $('#theme-toggle').onclick = () => setTheme(state.user.theme === 'dark' ? 'aero' : 'dark');
 
-  $('#peer-avatar')?.addEventListener('click', () => {
+  $('#peer-avatar')?.addEventListener('click', (e) => {
+    e.stopPropagation();
     const c = getActiveChat();
     if (c) openAvatarLightbox(c);
   });
+  const peerMeta = $('.peer-meta');
+  if (peerMeta) {
+    peerMeta.addEventListener('pointerdown', (e) => e.preventDefault());
+    peerMeta.addEventListener('mousedown', (e) => e.preventDefault());
+    peerMeta.addEventListener('click', () => {
+      if ($('#details').classList.contains('hidden')) openDetailsPanel();
+      else closeDetailsPanel();
+    });
+  }
   $('#details-avatar')?.addEventListener('click', () => {
     const c = getActiveChat();
     if (c) openAvatarLightbox(c);
@@ -1123,6 +1302,10 @@ function wireEvents() {
 
   $('#back-btn').onclick = () => {
     let popCount = 0;
+    if (document.querySelector('.chat-more-backdrop')) {
+      closeChatMoreMenu(true);
+      popCount++;
+    }
     if (isEmojiTrayOpen()) {
       closeEmojiTray(true);
       if (window.innerWidth <= 700) popCount++;
@@ -1143,12 +1326,28 @@ function wireEvents() {
   };
   $('#details-close').onclick = () => closeDetailsPanel();
   $('#details-backdrop')?.addEventListener('click', () => closeDetailsPanel());
-  $('#more-btn').onclick = () => {
-    if ($('#details').classList.contains('hidden')) openDetailsPanel();
-    else closeDetailsPanel();
-  };
 
-  // Swipe right to collapse profile drawer on mobile / tablet
+  const moreBtn = $('#more-btn');
+  if (moreBtn) {
+    let lastMoreAt = 0;
+    const toggleMore = (e) => {
+      const now = Date.now();
+      if (e.type === 'touchend') {
+        if (e.cancelable) e.preventDefault();
+        lastMoreAt = now;
+      } else if (now - lastMoreAt < 450) {
+        return;
+      }
+      e.stopPropagation();
+      openChatMoreMenu(moreBtn);
+    };
+    moreBtn.addEventListener('pointerdown', (e) => e.preventDefault());
+    moreBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    moreBtn.addEventListener('touchend', toggleMore, { passive: false });
+    moreBtn.addEventListener('click', toggleMore);
+  }
+
+  // Swipe down to collapse bottom profile sheet on mobile / tablet
   const detailsDrawer = $('#details');
   if (detailsDrawer) {
     let dStartX = 0;
@@ -1171,16 +1370,16 @@ function wireEvents() {
       if (window.innerWidth > 1050 || detailsDrawer.classList.contains('hidden') || e.touches.length !== 1) return;
       const dx = e.touches[0].clientX - dStartX;
       const dy = e.touches[0].clientY - dStartY;
-      if (!dDragging && dx > 12 && dx > Math.abs(dy) * 1.25) {
+      if (!dDragging && detailsDrawer.scrollTop <= 0 && dy > 12 && dy > Math.abs(dx) * 1.2) {
         dDragging = true;
       }
       if (dDragging) {
-        dDelta = Math.max(0, dx);
-        detailsDrawer.style.transform = `translateX(${dDelta}px)`;
+        dDelta = Math.max(0, dy);
+        detailsDrawer.style.transform = `translateY(${dDelta}px)`;
         const bd = $('#details-backdrop');
         if (bd) {
-          const w = Math.max(200, detailsDrawer.offsetWidth || 300);
-          bd.style.opacity = String(Math.max(0, 1 - dDelta / w));
+          const h = Math.max(240, detailsDrawer.offsetHeight || 420);
+          bd.style.opacity = String(Math.max(0, 1 - dDelta / h));
         }
       }
     }, { passive: true });
@@ -1194,7 +1393,7 @@ function wireEvents() {
       const elapsed = Date.now() - dStartAt;
       if (dDelta > 72 || (dDelta > 34 && elapsed < 220)) {
         detailsDrawer.style.transition = 'transform 0.16s ease-out';
-        detailsDrawer.style.transform = 'translateX(100%)';
+        detailsDrawer.style.transform = 'translateY(100%)';
         setTimeout(() => closeDetailsPanel(), 150);
       } else {
         detailsDrawer.style.transition = 'transform 0.18s ease-out';
@@ -1318,6 +1517,10 @@ function wireEvents() {
       closeAvatarLightbox(true);
       return;
     }
+    if (document.querySelector('.chat-more-backdrop')) {
+      closeChatMoreMenu(true);
+      return;
+    }
     if (document.querySelector('.msg-context-backdrop')) {
       closeMessageMenu(true);
       return;
@@ -1399,6 +1602,10 @@ function wireEvents() {
   window.WhisperHandleNativeBack = () => {
     if (document.querySelector('dialog.avatar-lightbox-dialog[open]')) {
       closeAvatarLightbox();
+      return true;
+    }
+    if (document.querySelector('.chat-more-backdrop')) {
+      closeChatMoreMenu();
       return true;
     }
     if (document.querySelector('.msg-context-backdrop')) {

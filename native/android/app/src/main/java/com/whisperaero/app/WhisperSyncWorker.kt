@@ -114,6 +114,7 @@ class WhisperSyncWorker(
                     if (MainActivity.isAppInForeground || convId.isBlank()) continue
 
                     val meta = SessionStore.getPeerMeta(applicationContext, convId)
+                    if (meta.muted) continue
                     val body = row.optString("body").ifBlank {
                         if (!row.isNull("attachment_id")) "Sent an attachment" else "New message"
                     }

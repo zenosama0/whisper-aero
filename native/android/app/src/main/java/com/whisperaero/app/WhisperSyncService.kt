@@ -231,6 +231,7 @@ class WhisperSyncService : Service() {
                     if (senderId.isBlank() || senderId == session.userId || convId.isBlank()) return
 
                     val meta = SessionStore.getPeerMeta(this, convId)
+                    if (meta.muted) return
                     val textBody = record.optString("body").ifBlank {
                         if (!record.isNull("attachment_id")) "Sent an attachment" else "New message"
                     }

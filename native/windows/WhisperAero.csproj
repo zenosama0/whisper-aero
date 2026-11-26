@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Whisper</AssemblyName>
     <RootNamespace>WhisperAero</RootNamespace>
-    <Version>2026.11.27.24</Version>
+    <Version>2026.11.27.25</Version>
     <ApplicationIcon Condition="Exists('app.ico')">app.ico</ApplicationIcon>
   </PropertyGroup>
 

@@ -640,6 +640,16 @@ export async function setConversationFavorite(conversationId, userId, isFavorite
   if (error) throw error;
 }
 
+export async function setConversationMuted(conversationId, userId, isMuted) {
+  requireConversationId(conversationId);
+  const { error } = await supabase
+    .from('conversation_members')
+    .update({ is_muted: Boolean(isMuted) })
+    .eq('conversation_id', conversationId)
+    .eq('user_id', userId);
+  if (error) throw error;
+}
+
 export async function sendAttachment({ conversationId, file, caption = '', replyToId = null, viewOnce = false }) {
   requireConversationId(conversationId);
   const { data: { session } } = await supabase.auth.getSession();

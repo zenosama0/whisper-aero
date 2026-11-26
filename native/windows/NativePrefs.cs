@@ -14,6 +14,7 @@ public sealed class PeerMeta
 {
     public string Name { get; set; } = "Whisper";
     public string Avatar { get; set; } = string.Empty;
+    public bool Muted { get; set; }
 }
 
 public sealed class StoredSession
@@ -158,7 +159,8 @@ public static class NativePrefs
                     if (string.IsNullOrWhiteSpace(id)) continue;
                     var name = item.TryGetProperty("name", out var nm) ? (nm.GetString() ?? "Whisper") : "Whisper";
                     var avatar = item.TryGetProperty("avatar", out var av) ? (av.GetString() ?? "") : "";
-                    chats[id] = new PeerMeta { Name = string.IsNullOrWhiteSpace(name) ? "Whisper" : name, Avatar = avatar };
+                    var muted = item.TryGetProperty("muted", out var mt) && mt.ValueKind == JsonValueKind.True;
+                    chats[id] = new PeerMeta { Name = string.IsNullOrWhiteSpace(name) ? "Whisper" : name, Avatar = avatar, Muted = muted };
                 }
             }
 

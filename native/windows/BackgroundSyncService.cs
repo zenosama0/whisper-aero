@@ -176,6 +176,7 @@ public sealed class BackgroundSyncService : IDisposable
                     if (string.IsNullOrWhiteSpace(senderId) || senderId == latestSession.UserId || string.IsNullOrWhiteSpace(convId)) return;
 
                     latestSession.Chats.TryGetValue(convId, out var meta);
+                    if (meta?.Muted == true) return;
                     var body = rec.TryGetProperty("body", out var bd) ? (bd.GetString() ?? "") : "";
                     if (string.IsNullOrWhiteSpace(body))
                     {
@@ -245,6 +246,7 @@ public sealed class BackgroundSyncService : IDisposable
                 if (string.IsNullOrWhiteSpace(convId)) continue;
 
                 latestSession.Chats.TryGetValue(convId, out var meta);
+                if (meta?.Muted == true) continue;
                 var body = row.TryGetProperty("body", out var bd) ? (bd.GetString() ?? "") : "";
                 if (string.IsNullOrWhiteSpace(body))
                 {

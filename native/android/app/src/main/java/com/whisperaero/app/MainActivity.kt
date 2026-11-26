@@ -494,6 +494,22 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun openChatBubble(conversationId: String?, title: String?, iconUrl: String?): Boolean {
+            val id = conversationId?.trim().orEmpty()
+            if (id.isEmpty()) return false
+            val opened = NotificationHelper.openChatAsBubble(
+                this@MainActivity,
+                conversationId = id,
+                title = title ?: "Whisper",
+                iconUrl = iconUrl ?: "",
+            )
+            if (!opened) {
+                openBubbleSettings()
+            }
+            return opened
+        }
+
+        @JavascriptInterface
         fun setBackgroundSyncEnabled(enabled: Boolean) {
             SessionStore.setBackgroundSyncEnabled(this@MainActivity, enabled)
             WhisperSyncService.syncState(this@MainActivity)

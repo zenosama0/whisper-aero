@@ -245,68 +245,17 @@ object NotificationHelper {
                 .setContentIntent(pendingIntent)
 
             if (conversationId.isNotBlank() && !isCall) {
-                val shortcutId = "chat_$conversationId"
-                val senderPerson = Person.Builder()
-                    .setName(peerTitle)
-                    .setKey(shortcutId)
-                    .setIcon(personIcon)
-                    .setImportant(true)
-                    .build()
-
-                val mePerson = Person.Builder()
-                    .setName("You")
-                    .setKey("me")
-                    .build()
-
-                val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
-                    .setShortLabel(peerTitle)
-                    .setLongLabel(peerTitle)
-                    .setLongLived(true)
-                    .setIcon(shortcutAvatar)
-                    .setPerson(senderPerson)
-                    .setLocusId(LocusIdCompat(shortcutId))
-                    .setIntent(
-                        Intent(context, MainActivity::class.java).apply {
-                            action = Intent.ACTION_VIEW
-                            putExtra(EXTRA_CHAT_ID, conversationId)
-                        },
-                    )
-                    .build()
-                ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
-
-                val messagingStyle = NotificationCompat.MessagingStyle(mePerson)
-                lines.forEach { entry ->
-                    messagingStyle.addMessage(entry.text, entry.timestamp, senderPerson)
-                }
-                builder.setStyle(messagingStyle)
-                    .setShortcutId(shortcutId)
-                    .setLocusId(LocusIdCompat(shortcutId))
-
-                // Floating Android Chat Bubble (API 29+ / 30+)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val bubbleIntent = Intent(context, BubbleActivity::class.java).apply {
-                        action = Intent.ACTION_VIEW
-                        data = android.net.Uri.parse("whisperaero://bubble/${android.net.Uri.encode(conversationId)}")
-                        putExtra(EXTRA_CHAT_ID, conversationId)
-                    }
-                    val bubbleFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-                    } else {
-                        PendingIntent.FLAG_UPDATE_CURRENT
-                    }
-                    val bubblePending = PendingIntent.getActivity(
-                        context,
-                        notifId + 30003,
-                        bubbleIntent,
-                        bubbleFlags,
-                    )
-                    val bubbleMeta = NotificationCompat.BubbleMetadata.Builder(bubblePending, shortcutAvatar)
-                        .setDesiredHeight(580)
-                        .setAutoExpandBubble(false)
-                        .setSuppressNotification(false)
-                        .build()
-                    builder.setBubbleMetadata(bubbleMeta)
-                }
+                applyChatBubbleStyle(
+                    context = context,
+                    builder = builder,
+                    conversationId = conversationId,
+                    peerTitle = peerTitle,
+                    largeIcon = largeIcon,
+                    lines = lines,
+                    notifId = notifId,
+                    autoExpandBubble = false,
+                    suppressNotif = false,
+                )
 
                 // Inline Quick Reply
                 val replyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
@@ -359,6 +308,147 @@ object NotificationHelper {
             } catch (_: SecurityException) {
             }
         }
+    }
+
+    private fun applyChatBubbleStyle(
+        context: Context,
+        builder: NotificationCompat.Builder,
+        conversationId: String,
+        peerTitle: String,
+        largeIcon: Bitmap,
+        lines: List<BufferedMsgLine>,
+        notifId: Int,
+        autoExpandBubble: Boolean,
+        suppressNotif: Boolean,
+    ) {
+        val personIcon = IconCompat.createWithBitmap(largeIcon)
+        val shortcutAvatar = IconCompat.createWithAdaptiveBitmap(largeIcon)
+        val shortcutId = "chat_$conversationId"
+
+        val senderPerson = Person.Builder()
+            .setName(peerTitle)
+            .setKey(shortcutId)
+            .setIcon(personIcon)
+            .setImportant(true)
+            .build()
+
+        val mePerson = Person.Builder()
+            .setName("You")
+            .setKey("me")
+            .build()
+
+        val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
+            .setShortLabel(peerTitle)
+            .setLongLabel(peerTitle)
+            .setLongLived(true)
+            .setIcon(shortcutAvatar)
+            .setPerson(senderPerson)
+            .setLocusId(LocusIdCompat(shortcutId))
+            .setIntent(
+                Intent(context, MainActivity::class.java).apply {
+                    action = Intent.ACTION_VIEW
+                    putExtra(EXTRA_CHAT_ID, conversationId)
+                },
+            )
+            .build()
+        ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
+
+        val messagingStyle = NotificationCompat.MessagingStyle(mePerson)
+        lines.forEach { entry ->
+            messagingStyle.addMessage(entry.text, entry.timestamp, senderPerson)
+        }
+        builder.setStyle(messagingStyle)
+            .setShortcutId(shortcutId)
+            .setLocusId(LocusIdCompat(shortcutId))
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val bubbleIntent = Intent(context, BubbleActivity::class.java).apply {
+                action = Intent.ACTION_VIEW
+                data = android.net.Uri.parse("whisperaero://bubble/${android.net.Uri.encode(conversationId)}")
+                putExtra(EXTRA_CHAT_ID, conversationId)
+            }
+            val bubbleFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val bubblePending = PendingIntent.getActivity(
+                context,
+                notifId + 30003,
+                bubbleIntent,
+                bubbleFlags,
+            )
+            val bubbleMeta = NotificationCompat.BubbleMetadata.Builder(bubblePending, shortcutAvatar)
+                .setDesiredHeight(600)
+                .setAutoExpandBubble(autoExpandBubble)
+                .setSuppressNotification(suppressNotif)
+                .build()
+            builder.setBubbleMetadata(bubbleMeta)
+        }
+    }
+
+    fun openChatAsBubble(
+        context: Context,
+        conversationId: String,
+        title: String,
+        iconUrl: String,
+    ): Boolean {
+        if (conversationId.isBlank() || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        ensureChannels(context)
+        if (!isPermissionGranted(context) || !areBubblesEnabled(context)) return false
+
+        val peerTitle = title.ifBlank { "Whisper" }
+        val notifId = conversationId.hashCode()
+        val existing = synchronized(chatHistory) {
+            chatHistory[conversationId]?.toList()
+        }
+        val lines = if (!existing.isNullOrEmpty()) {
+            existing
+        } else {
+            listOf(BufferedMsgLine("Chat ready in floating bubble", System.currentTimeMillis()))
+        }
+
+        ioPool.execute {
+            val largeIcon = loadCircularAvatar(iconUrl) ?: buildFallbackAvatar(peerTitle)
+            val launchIntent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_CHAT_ID, conversationId)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                notifId,
+                launchIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            val builder = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(peerTitle)
+                .setContentText(lines.last().text)
+                .setLargeIcon(largeIcon)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setOnlyAlertOnce(true)
+                .setContentIntent(pendingIntent)
+
+            applyChatBubbleStyle(
+                context = context,
+                builder = builder,
+                conversationId = conversationId,
+                peerTitle = peerTitle,
+                largeIcon = largeIcon,
+                lines = lines,
+                notifId = notifId,
+                autoExpandBubble = true,
+                suppressNotif = true,
+            )
+
+            try {
+                NotificationManagerCompat.from(context).notify(notifId, builder.build())
+            } catch (_: SecurityException) {
+            }
+        }
+        return true
     }
 
     fun showTest(context: Context) {

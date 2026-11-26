@@ -153,6 +153,24 @@ export function openNativeBubbleSettings() {
   return false;
 }
 
+export function openNativeChatBubble(chat) {
+  if (!chat?.id) return false;
+  try {
+    if (isNativeAndroid() && typeof window.WhisperNative.openChatBubble === 'function') {
+      return Boolean(
+        window.WhisperNative.openChatBubble(
+          String(chat.id),
+          String(chat.name || 'Whisper'),
+          String(chat.avatar || ''),
+        ),
+      );
+    }
+  } catch {
+    // Ignore
+  }
+  return false;
+}
+
 export function pushNativeChatShortcuts(chats) {
   try {
     if (isNativeAndroid() && typeof window.WhisperNative.pushChatShortcuts === 'function') {

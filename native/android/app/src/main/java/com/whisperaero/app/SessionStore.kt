@@ -19,6 +19,7 @@ data class NativeSession(
 data class PeerMeta(
     val name: String,
     val avatar: String,
+    val muted: Boolean = false,
 )
 
 object SessionStore {
@@ -60,6 +61,7 @@ object SessionStore {
                         JSONObject().apply {
                             put("name", item.optString("name", "Whisper"))
                             put("avatar", item.optString("avatar", ""))
+                            put("muted", item.optBoolean("muted", false))
                         },
                     )
                 }
@@ -135,6 +137,7 @@ object SessionStore {
                 PeerMeta(
                     obj.optString("name", "Whisper").ifBlank { "Whisper" },
                     obj.optString("avatar", ""),
+                    obj.optBoolean("muted", false),
                 )
             } catch (_: Exception) {
                 PeerMeta("Whisper", "")
