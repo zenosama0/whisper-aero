@@ -713,7 +713,10 @@ function wireEvents() {
     openSettingsModal({ onThemeChange: setTheme, onSignOut: handleSignOut });
   $('#theme-toggle').onclick = () => setTheme(state.user.theme === 'dark' ? 'aero' : 'dark');
 
-  $('#back-btn').onclick = () => $('#conversation').classList.remove('mobile-open');
+  $('#back-btn').onclick = () => {
+    $('#conversation').classList.remove('mobile-open');
+    $('#details').classList.add('hidden');
+  };
   $('#details-close').onclick = () => $('#details').classList.add('hidden');
   $('#more-btn').onclick = () => $('#details').classList.toggle('hidden');
 
