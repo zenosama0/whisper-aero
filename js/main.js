@@ -1,6 +1,7 @@
 import { configured } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=20';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=21';
+import { sendNativeNotification, syncNativeTheme } from './native.js?v=21';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
@@ -70,6 +71,7 @@ function setTheme(theme) {
   document.body.classList.toggle('minimal', theme === 'minimal');
   const toggle = $('#theme-toggle');
   if (toggle) toggle.innerHTML = theme === 'dark' ? SUN_ICON : MOON_ICON;
+  syncNativeTheme(theme);
 }
 
 function authNotice(message, isError = false) {
@@ -302,12 +304,22 @@ async function handleMessageRealtime(payload) {
       } else {
         chat.unread = (chat.unread || 0) + 1;
         playNotificationChime(state.soundEnabled, 'message');
-        if (document.visibilityState === 'hidden' && 'Notification' in window && Notification.permission === 'granted') {
-          new Notification(chat.name, {
-            body: msg.file ? `Sent ${msg.file.name}` : msg.text,
-            icon: './icon.svg',
+        if (document.visibilityState === 'hidden') {
+          const preview = msg.file ? `Sent ${msg.file.name}` : msg.text;
+          const handledNative = sendNativeNotification({
+            conversationId: chat.id,
+            title: chat.name,
+            body: preview,
+            icon: chat.avatar || '',
             tag: `whisper-msg-${chat.id}`,
           });
+          if (!handledNative && 'Notification' in window && Notification.permission === 'granted') {
+            new Notification(chat.name, {
+              body: preview,
+              icon: chat.avatar || './icon-192.png',
+              tag: `whisper-msg-${chat.id}`,
+            });
+          }
         }
       }
     }
@@ -378,12 +390,19 @@ async function handleRequestRealtime(payload) {
   ) {
     showToast('You have a new friend request');
     playNotificationChime(state.soundEnabled, 'message');
-    if (document.visibilityState === 'hidden' && 'Notification' in window && Notification.permission === 'granted') {
-      new Notification('New friend request', {
+    if (document.visibilityState === 'hidden') {
+      const handledNative = sendNativeNotification({
+        title: 'New friend request',
         body: 'Someone would like to connect on Whisper.',
-        icon: './icon.svg',
         tag: 'whisper-request',
       });
+      if (!handledNative && 'Notification' in window && Notification.permission === 'granted') {
+        new Notification('New friend request', {
+          body: 'Someone would like to connect on Whisper.',
+          icon: './icon-192.png',
+          tag: 'whisper-request',
+        });
+      }
     }
   }
   await refreshInbox();
@@ -394,12 +413,21 @@ function handleCallInviteRealtime(payload) {
   const chat = getChat(payload.new?.conversation_id);
   showToast(`${chat?.name || 'Your contact'} is calling`);
   playNotificationChime(state.soundEnabled, 'call');
-  if (document.visibilityState === 'hidden' && 'Notification' in window && Notification.permission === 'granted') {
-    new Notification('Incoming call notification', {
+  if (document.visibilityState === 'hidden') {
+    const handledNative = sendNativeNotification({
+      conversationId: chat?.id || '',
+      title: 'Incoming call notification',
       body: `${chat?.name || 'A contact'} is trying to reach you.`,
-      icon: './icon.svg',
-      tag: 'whisper-call',
+      icon: chat?.avatar || '',
+      tag: chat?.id ? `whisper-call-${chat.id}` : 'whisper-call',
     });
+    if (!handledNative && 'Notification' in window && Notification.permission === 'granted') {
+      new Notification('Incoming call notification', {
+        body: `${chat?.name || 'A contact'} is trying to reach you.`,
+        icon: chat?.avatar || './icon-192.png',
+        tag: 'whisper-call',
+      });
+    }
   }
   if (navigator.vibrate) navigator.vibrate([180, 80, 180]);
 }
@@ -1145,6 +1173,45 @@ function wireEvents() {
   window.addEventListener('online', () => {
     resumeSync();
   });
+
+  window.WhisperOnNativeResume = () => resumeSync();
+  window.WhisperOpenChat = (chatId) => {
+    if (chatId) resumeSync({ forceChatId: String(chatId) });
+  };
+  window.WhisperHandleNativeBack = () => {
+    if (document.querySelector('.msg-context-backdrop')) {
+      closeMessageMenu();
+      return true;
+    }
+    if ($('#modal')?.open) {
+      closeModal();
+      return true;
+    }
+    if (isSettingsPageOpen()) {
+      closeSettingsPage();
+      return true;
+    }
+    if (!$('#details').classList.contains('hidden') && window.innerWidth <= 1050) {
+      $('#details').classList.add('hidden');
+      popUiLayer();
+      return true;
+    }
+    if (isEmojiTrayOpen()) {
+      closeEmojiTray();
+      return true;
+    }
+    if (state.chatSearch.open) {
+      closeChatSearch();
+      if (window.innerWidth <= 700) popUiLayer();
+      return true;
+    }
+    if ($('#conversation').classList.contains('mobile-open')) {
+      $('#conversation').classList.remove('mobile-open');
+      popUiLayer();
+      return true;
+    }
+    return false;
+  };
 }
 
 async function bootstrap() {

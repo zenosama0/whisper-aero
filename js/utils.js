@@ -160,6 +160,11 @@ export function playNotificationChime(enabled = true, type = 'message') {
 
 export function haptic(pattern = 15) {
   try {
+    if (typeof window !== 'undefined' && typeof window.WhisperNative?.vibrate === 'function') {
+      const ms = Array.isArray(pattern) ? (Number(pattern[0]) || 15) : (Number(pattern) || 15);
+      window.WhisperNative.vibrate(ms);
+      return;
+    }
     if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
       navigator.vibrate(pattern);
     }

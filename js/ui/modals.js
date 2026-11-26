@@ -1,5 +1,5 @@
 import * as api from '../api.js';
-import { searchEmojis } from '../emoji.js?v=20';
+import { searchEmojis } from '../emoji.js?v=21';
 import {
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,
