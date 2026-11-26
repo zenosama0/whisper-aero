@@ -138,3 +138,23 @@ export function replaceEmojiShortcodes(text) {
     return emoji || full;
   });
 }
+
+export const EMOJI_CATALOG = (() => {
+  const seen = new Map();
+  for (const [name, emoji] of Object.entries(EMOJI_SHORTCODES)) {
+    const existing = seen.get(emoji);
+    if (existing) {
+      existing.keywords += ` ${name.replace(/_/g, ' ')}`;
+    } else {
+      seen.set(emoji, { emoji, name, keywords: name.replace(/_/g, ' ') });
+    }
+  }
+  return [...seen.values()];
+})();
+
+export function searchEmojis(query) {
+  const q = String(query || '').trim().toLowerCase().replace(/^:/, '');
+  if (!q) return EMOJI_CATALOG;
+  return EMOJI_CATALOG.filter((item) => item.name.includes(q) || item.keywords.includes(q));
+}
+

@@ -405,6 +405,14 @@ function openMessageMenu(msg, chat, anchorRect) {
   });
 }
 
+function isSameCluster(a, b) {
+  if (!a || !b || a.deletedAt || b.deletedAt) return false;
+  if (a.from !== b.from) return false;
+  if (dayKey(a.createdAt) !== dayKey(b.createdAt)) return false;
+  const diff = Math.abs(new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return diff <= 3 * 60 * 1000;
+}
+
 export function renderMessages({ preserveScroll = false } = {}) {
   const c = getActiveChat();
   const box = $('#messages');
@@ -425,7 +433,8 @@ export function renderMessages({ preserveScroll = false } = {}) {
     chunks.push('<div class="people-empty">No messages yet. Say hello!</div>');
   }
 
-  for (const m of c.messages) {
+  for (let i = 0; i < c.messages.length; i++) {
+    const m = c.messages[i];
     const dk = dayKey(m.createdAt);
     if (dk && dk !== lastDay) {
       lastDay = dk;
@@ -433,6 +442,8 @@ export function renderMessages({ preserveScroll = false } = {}) {
     }
 
     const mine = m.from === 'me';
+    const clusterPrev = isSameCluster(c.messages[i - 1], m);
+    const clusterNext = isSameCluster(m, c.messages[i + 1]);
     const isMatch = searchTerm && !m.deletedAt && m.text?.toLowerCase().includes(searchTerm.toLowerCase());
     const activeMatchId = state.chatSearch.matchIds[state.chatSearch.activeIndex];
     const isActiveMatch = activeMatchId === m.id;
@@ -484,20 +495,22 @@ export function renderMessages({ preserveScroll = false } = {}) {
     }
 
     const reactionsHtml = (m.reactions || [])
-      .map((r) => `<button class="reaction-chip ${r.mine ? 'mine-reaction' : ''}" type="button" data-emoji="${esc(r.emoji)}" data-reaction-message="${esc(m.id)}">${esc(r.emoji)} ${r.count}</button>`)
+      .map((r) => `<button class="reaction-chip ${r.mine ? 'mine-reaction' : ''}" type="button" data-emoji="${esc(r.emoji)}" data-reaction-message="${esc(m.id)}">${esc(r.emoji)}${r.count > 1 ? ` ${r.count}` : ''}</button>`)
       .join('');
 
     const isSeen = mine && c.peerLastReadAt && m.createdAt && new Date(c.peerLastReadAt) >= new Date(m.createdAt);
     const ticks = mine ? (m.pending ? '⏳' : isSeen ? '✓✓' : '✓') : '';
+    const showMeta = !clusterNext || Boolean(m.editedAt) || Boolean(m.pending);
+    const avatarHtml = mine ? '' : (clusterPrev ? '<span class="mini-avatar-spacer" aria-hidden="true"></span>' : avatarMarkup(c, 'mini-avatar'));
 
     chunks.push(`
-      <div class="message-row ${mine ? 'mine' : 'theirs'} ${isMatch ? 'search-row-match' : ''}" data-msg-id="${esc(m.id)}">
+      <div class="message-row ${mine ? 'mine' : 'theirs'} ${clusterPrev ? 'cluster-prev' : ''} ${clusterNext ? 'cluster-next' : ''} ${isMatch ? 'search-row-match' : ''}" data-msg-id="${esc(m.id)}">
         <span class="swipe-reply-hint" aria-hidden="true">↩</span>
-        ${mine ? '' : avatarMarkup(c, 'mini-avatar')}
+        ${avatarHtml}
         <div class="message-wrap">
           ${bodyHtml}
           ${reactionsHtml ? `<div class="message-reactions">${reactionsHtml}</div>` : ''}
-          <div class="message-meta">${esc(m.time || formatTime(m.createdAt))}${m.editedAt ? ' · edited' : ''} ${ticks}</div>
+          ${showMeta ? `<div class="message-meta">${esc(m.time || formatTime(m.createdAt))}${m.editedAt ? ' · edited' : ''} ${ticks}</div>` : ''}
         </div>
       </div>
     `);

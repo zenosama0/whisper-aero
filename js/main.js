@@ -1,6 +1,6 @@
 import { configured } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes } from './emoji.js';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
@@ -29,6 +29,7 @@ import {
   $,
   $$,
   closeModal,
+  esc,
   formatTime,
   initials,
   playNotificationChime,
@@ -749,18 +750,105 @@ function wireEvents() {
   };
 
   const emojiBtn = $('#emoji-btn');
+  const emojiTray = $('#emoji-tray');
+  const emojiGrid = $('#emoji-grid');
+  const emojiSearch = $('#emoji-search-input');
+  const EMOJI_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/></svg>';
+  const KEYBOARD_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M8 13h8"/></svg>';
+
+  const insertEmojiAtCursor = (emoji) => {
+    const input = $('#message-input');
+    if (!input) return;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.value = input.value.slice(0, start) + emoji + input.value.slice(end);
+    const nextPos = start + emoji.length;
+    input.setSelectionRange(nextPos, nextPos);
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(110, input.scrollHeight)}px`;
+    if (window.innerWidth > 700) {
+      input.focus({ preventScroll: true });
+    }
+  };
+
+  const renderEmojiGrid = (term = '') => {
+    if (!emojiGrid) return;
+    const items = searchEmojis(term);
+    emojiGrid.innerHTML = items.length
+      ? items
+          .map((item) => `<button type="button" class="emoji-cell" title=":${esc(item.name)}:" data-emoji-pick="${esc(item.emoji)}">${item.emoji}</button>`)
+          .join('')
+      : '<div class="people-empty" style="grid-column:1/-1">No matching emojis</div>';
+
+    emojiGrid.querySelectorAll('[data-emoji-pick]').forEach((btn) => {
+      btn.addEventListener('pointerdown', (e) => e.preventDefault());
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.onclick = () => insertEmojiAtCursor(btn.dataset.emojiPick);
+    });
+  };
+
+  const isEmojiTrayOpen = () => Boolean(emojiTray && !emojiTray.classList.contains('hidden'));
+
+  const closeEmojiTray = () => {
+    if (!emojiTray || emojiTray.classList.contains('hidden')) return;
+    emojiTray.classList.add('hidden');
+    if (emojiBtn) emojiBtn.innerHTML = EMOJI_ICON;
+  };
+
+  const openEmojiTray = () => {
+    if (!emojiTray) return;
+    if (window.innerWidth <= 700) {
+      $('#message-input')?.blur();
+      $('#emoji-search-input')?.blur();
+    }
+    if (emojiSearch) emojiSearch.value = '';
+    renderEmojiGrid('');
+    emojiTray.classList.remove('hidden');
+    if (emojiBtn && window.innerWidth <= 700) emojiBtn.innerHTML = KEYBOARD_ICON;
+    const box = $('#messages');
+    if (box) box.scrollTop = box.scrollHeight;
+  };
+
   emojiBtn?.addEventListener('pointerdown', (e) => e.preventDefault());
   emojiBtn?.addEventListener('mousedown', (e) => e.preventDefault());
-  emojiBtn.onclick = () => $('#emoji-pop').classList.toggle('hidden');
-  $('#emoji-pop').querySelectorAll('button').forEach((btn) => {
-    btn.addEventListener('pointerdown', (e) => e.preventDefault());
-    btn.addEventListener('mousedown', (e) => e.preventDefault());
-    btn.onclick = () => {
-      const input = $('#message-input');
-      input.value += [...btn.textContent][0];
-      $('#emoji-pop').classList.add('hidden');
-      input.focus({ preventScroll: true });
-    };
+  emojiBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (isEmojiTrayOpen()) {
+      closeEmojiTray();
+      $('#message-input')?.focus({ preventScroll: true });
+    } else {
+      openEmojiTray();
+    }
+  });
+
+  emojiSearch?.addEventListener('input', (e) => renderEmojiGrid(e.target.value));
+
+  // On mobile, close the emoji tray synchronously before the phone keyboard rises
+  const dismissTrayOnInputTap = () => {
+    if (window.innerWidth <= 700 && isEmojiTrayOpen()) {
+      closeEmojiTray();
+    }
+  };
+  $('#message-input')?.addEventListener('pointerdown', dismissTrayOnInputTap);
+  $('#message-input')?.addEventListener('touchstart', dismissTrayOnInputTap, { passive: true });
+  $('#message-input')?.addEventListener('focus', dismissTrayOnInputTap);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isEmojiTrayOpen()) {
+      closeEmojiTray();
+      $('#message-input')?.focus({ preventScroll: true });
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (
+      window.innerWidth > 700
+      && isEmojiTrayOpen()
+      && !e.target.closest('#emoji-tray')
+      && !e.target.closest('#emoji-btn')
+    ) {
+      closeEmojiTray();
+    }
   });
 
   // Keep mobile open conversation & chat header pinned inside visualViewport when keyboard opens
@@ -795,6 +883,7 @@ function wireEvents() {
   $('#theme-toggle').onclick = () => setTheme(state.user.theme === 'dark' ? 'aero' : 'dark');
 
   $('#back-btn').onclick = () => {
+    closeEmojiTray();
     $('#conversation').classList.remove('mobile-open');
     $('#details').classList.add('hidden');
   };
