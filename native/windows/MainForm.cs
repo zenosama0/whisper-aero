@@ -4,8 +4,10 @@ using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Toolkit.Uwp.Notifications;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -15,17 +17,37 @@ public sealed class MainForm : Form
 {
     private const string AppUrl = "https://zenosama0.github.io/whisper-aero/";
     private const int DwmwaUseImmersiveDarkMode = 20;
+    private const uint FlashwAll = 3;
+    private const uint FlashwTimerNoFg = 12;
 
     private readonly WebView2 _webView;
     private readonly NotifyIcon _trayIcon;
+    private readonly NativeNotifier _notifier;
+    private readonly BackgroundSyncService _bgSync;
+    private readonly AppPrefs _prefs;
+    private EventWaitHandle? _activateEvent;
     private bool _allowExit;
-    private string _lastNotifyChatId = string.Empty;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FLASHWINFO
+    {
+        public uint cbSize;
+        public IntPtr hwnd;
+        public uint dwFlags;
+        public uint uCount;
+        public uint dwTimeout;
+    }
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
+    [DllImport("user32.dll")]
+    private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
     public MainForm()
     {
+        _prefs = NativePrefs.LoadPrefs();
+
         Text = "Whisper";
         Width = 1180;
         Height = 780;
@@ -47,19 +69,57 @@ public sealed class MainForm : Form
             ContextMenuStrip = trayMenu,
         };
         _trayIcon.DoubleClick += (_, _) => RestoreWindow();
+
+        _notifier = new NativeNotifier(_trayIcon);
+        _bgSync = new BackgroundSyncService();
+
+        _notifier.OpenChatRequested += chatId =>
+        {
+            BeginInvoke(() =>
+            {
+                RestoreWindow();
+                if (!string.IsNullOrEmpty(chatId)) OpenChatInWeb(chatId);
+            });
+        };
+
+        _notifier.QuickReplySubmitted += (chatId, text) =>
+        {
+            _ = Task.Run(async () =>
+            {
+                await _bgSync.SendQuickReplyAsync(chatId, text);
+                _notifier.ClearChat(chatId);
+            });
+        };
+
+        _notifier.MarkReadRequested += chatId =>
+        {
+            _ = Task.Run(async () =>
+            {
+                await _bgSync.MarkConversationReadAsync(chatId);
+                _notifier.ClearChat(chatId);
+            });
+        };
+
         _trayIcon.BalloonTipClicked += (_, _) =>
         {
             RestoreWindow();
-            if (!string.IsNullOrEmpty(_lastNotifyChatId))
+            if (!string.IsNullOrEmpty(_notifier.LastNotifiedChatId))
             {
-                OpenChatInWeb(_lastNotifyChatId);
+                OpenChatInWeb(_notifier.LastNotifiedChatId);
             }
         };
 
-        _webView = new WebView2
+        _bgSync.NotificationReceived += (convId, title, body, iconUrl, tag, msgId) =>
         {
-            Dock = DockStyle.Fill,
+            BeginInvoke(async () =>
+            {
+                if (IsAppFocused()) return;
+                FlashTaskbar();
+                await _notifier.ShowAsync(convId, title, body, iconUrl, tag, msgId);
+            });
         };
+
+        _webView = new WebView2 { Dock = DockStyle.Fill };
         Controls.Add(_webView);
 
         Load += async (_, _) => await InitializeWebViewAsync();
@@ -72,6 +132,40 @@ public sealed class MainForm : Form
                     "if(typeof window.WhisperOnNativeResume==='function') window.WhisperOnNativeResume();");
             }
         };
+
+        StartSingleInstanceListener();
+        _bgSync.StartOrRestart();
+    }
+
+    private void StartSingleInstanceListener()
+    {
+        try
+        {
+            _activateEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ActivateEventName);
+            var thread = new Thread(() =>
+            {
+                while (!_allowExit && _activateEvent != null)
+                {
+                    try
+                    {
+                        _activateEvent.WaitOne();
+                        if (_allowExit) break;
+                        BeginInvoke(RestoreWindow);
+                    }
+                    catch
+                    {
+                        break;
+                    }
+                }
+            })
+            {
+                IsBackground = true,
+            };
+            thread.Start();
+        }
+        catch
+        {
+        }
     }
 
     private async Task InitializeWebViewAsync()
@@ -120,6 +214,7 @@ public sealed class MainForm : Form
                 }
             };
 
+            core.NavigationCompleted += (_, _) => PushNativeStateToWeb();
             core.WebMessageReceived += (_, args) => HandleWebMessage(args.WebMessageAsJson);
 
             core.Navigate(AppUrl);
@@ -139,7 +234,21 @@ public sealed class MainForm : Form
         }
     }
 
-    private void HandleWebMessage(string json)
+    private void PushNativeStateToWeb()
+    {
+        if (_webView.CoreWebView2 == null) return;
+        var payload = JsonSerializer.Serialize(new
+        {
+            platform = "windows",
+            notificationsGranted = true,
+            launchOnStartup = NativePrefs.IsStartupEnabled(),
+            minimizeToTray = _prefs.MinimizeToTray,
+        });
+        _ = _webView.CoreWebView2.ExecuteScriptAsync(
+            $"if(typeof window.WhisperOnNativeState==='function') window.WhisperOnNativeState({payload});");
+    }
+
+    private async void HandleWebMessage(string json)
     {
         try
         {
@@ -152,25 +261,26 @@ public sealed class MainForm : Form
             {
                 case "notify":
                 {
+                    if (IsAppFocused()) break;
                     var title = root.TryGetProperty("title", out var t) ? (t.GetString() ?? "Whisper") : "Whisper";
                     var body = root.TryGetProperty("body", out var b) ? (b.GetString() ?? "New message") : "New message";
-                    _lastNotifyChatId = root.TryGetProperty("conversationId", out var c)
-                        ? (c.GetString() ?? string.Empty)
-                        : string.Empty;
-
-                    _trayIcon.BalloonTipTitle = string.IsNullOrWhiteSpace(title) ? "Whisper" : title;
-                    _trayIcon.BalloonTipText = string.IsNullOrWhiteSpace(body) ? "New message" : body;
-                    _trayIcon.BalloonTipIcon = ToolTipIcon.Info;
-                    _trayIcon.ShowBalloonTip(5000);
+                    var convId = root.TryGetProperty("conversationId", out var c) ? (c.GetString() ?? "") : "";
+                    var icon = root.TryGetProperty("icon", out var ic) ? (ic.GetString() ?? "") : "";
+                    var tag = root.TryGetProperty("tag", out var tg) ? (tg.GetString() ?? "whisper") : "whisper";
+                    var messageId = root.TryGetProperty("messageId", out var mid) ? (mid.GetString() ?? "") : "";
+                    FlashTaskbar();
+                    await _notifier.ShowAsync(convId, title, body, icon, tag, messageId);
+                    break;
+                }
+                case "testNotification":
+                {
+                    await _notifier.ShowAsync("", "Whisper Native Alerts", "Windows Toasts & Quick Reply are working!", "", "whisper-test");
                     break;
                 }
                 case "clearNotification":
                 {
-                    var chatId = root.TryGetProperty("conversationId", out var c) ? (c.GetString() ?? string.Empty) : string.Empty;
-                    if (!string.IsNullOrEmpty(chatId) && chatId == _lastNotifyChatId)
-                    {
-                        _lastNotifyChatId = string.Empty;
-                    }
+                    var chatId = root.TryGetProperty("conversationId", out var c) ? (c.GetString() ?? "") : "";
+                    if (!string.IsNullOrEmpty(chatId)) _notifier.ClearChat(chatId);
                     break;
                 }
                 case "theme":
@@ -179,12 +289,71 @@ public sealed class MainForm : Form
                     ApplyNativeTitleBarTheme(theme == "dark");
                     break;
                 }
+                case "syncSession":
+                {
+                    if (root.TryGetProperty("payload", out var payloadEl))
+                    {
+                        var hadSession = NativePrefs.LoadSession() != null;
+                        var saved = NativePrefs.SaveSessionFromBridge(payloadEl);
+                        if (saved != null && !hadSession)
+                        {
+                            _bgSync.StartOrRestart();
+                        }
+                    }
+                    PushNativeStateToWeb();
+                    break;
+                }
+                case "clearSession":
+                {
+                    NativePrefs.ClearSession();
+                    _bgSync.Stop();
+                    break;
+                }
+                case "setStartup":
+                {
+                    var enabled = root.TryGetProperty("enabled", out var en) && en.ValueKind == JsonValueKind.True;
+                    NativePrefs.SetStartupEnabled(enabled);
+                    PushNativeStateToWeb();
+                    break;
+                }
+                case "setMinimizeToTray":
+                {
+                    var enabled = !root.TryGetProperty("enabled", out var en) || en.ValueKind != JsonValueKind.False;
+                    _prefs.MinimizeToTray = enabled;
+                    NativePrefs.SavePrefs(_prefs);
+                    PushNativeStateToWeb();
+                    break;
+                }
+                case "copy":
+                {
+                    var text = root.TryGetProperty("text", out var tx) ? (tx.GetString() ?? "") : "";
+                    if (!string.IsNullOrEmpty(text)) Clipboard.SetText(text);
+                    break;
+                }
             }
         }
         catch
         {
-            // Ignore malformed bridge payloads
         }
+    }
+
+    private bool IsAppFocused()
+    {
+        return Visible && WindowState != FormWindowState.Minimized && ContainsFocus;
+    }
+
+    private void FlashTaskbar()
+    {
+        if (!IsHandleCreated || !Visible) return;
+        var info = new FLASHWINFO
+        {
+            cbSize = (uint)Marshal.SizeOf<FLASHWINFO>(),
+            hwnd = Handle,
+            dwFlags = FlashwAll | FlashwTimerNoFg,
+            uCount = 3,
+            dwTimeout = 0,
+        };
+        FlashWindowEx(ref info);
     }
 
     private void ApplyNativeTitleBarTheme(bool dark)
@@ -216,21 +385,26 @@ public sealed class MainForm : Form
     private void ExitApp()
     {
         _allowExit = true;
+        _bgSync.Dispose();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        try { _activateEvent?.Set(); _activateEvent?.Dispose(); } catch { }
         Close();
     }
 
     private void OnFormClosing(object? sender, FormClosingEventArgs e)
     {
-        if (!_allowExit && e.CloseReason == CloseReason.UserClosing)
+        if (!_allowExit && _prefs.MinimizeToTray && e.CloseReason == CloseReason.UserClosing)
         {
             e.Cancel = true;
             Hide();
             return;
         }
+        _allowExit = true;
+        _bgSync.Dispose();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        try { _activateEvent?.Set(); _activateEvent?.Dispose(); } catch { }
     }
 
     private static bool IsInAppHost(string host)
@@ -252,7 +426,6 @@ public sealed class MainForm : Form
         }
         catch
         {
-            // Ignore shell launch failures
         }
     }
 }

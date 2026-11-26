@@ -1,5 +1,17 @@
 import * as api from '../api.js';
-import { searchEmojis } from '../emoji.js?v=21';
+import { searchEmojis } from '../emoji.js?v=22';
+import {
+  getNativeCapabilities,
+  isNativeAndroid,
+  isNativeWindows,
+  openNativeNotificationSettings,
+  requestIgnoreBatteryOptimizations,
+  requestNativeNotifications,
+  sendNativeTestNotification,
+  setNativeBackgroundSync,
+  setWindowsMinimizeToTray,
+  setWindowsStartup,
+} from '../native.js?v=22';
 import {
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,
@@ -283,6 +295,62 @@ export function isSettingsPageOpen() {
   return Boolean(page && !page.classList.contains('hidden'));
 }
 
+function renderNotificationSettingsInner() {
+  if (isNativeAndroid()) {
+    const caps = getNativeCapabilities() || {};
+    const granted = Boolean(caps.notificationsGranted);
+    return `
+      <span>Android notifications<small id="android-notif-status">${granted ? 'Native Android notifications & Quick Reply enabled' : 'Notification permission required for alerts'}</small></span>
+      <div style="display:flex;gap:8px;flex:none">
+        <button class="secondary-btn" type="button" id="notify-enable">${granted ? 'Manage' : 'Enable'}</button>
+        ${granted ? '<button class="secondary-btn" type="button" id="notify-test-btn">Test</button>' : ''}
+      </div>
+    `;
+  }
+  if (isNativeWindows()) {
+    return `
+      <span>Windows notifications<small>Native Windows Toast alerts with Quick Reply</small></span>
+      <button class="secondary-btn" type="button" id="notify-test-btn">Test toast</button>
+    `;
+  }
+  return `
+    <span>Desktop &amp; push notifications<small>Alerts when Whisper is in the background</small></span>
+    <button class="secondary-btn" type="button" id="notify-enable">Enable</button>
+  `;
+}
+
+function renderPlatformExtraSettings() {
+  if (isNativeAndroid()) {
+    const caps = getNativeCapabilities() || {};
+    const bgOn = caps.backgroundSyncEnabled !== false;
+    const batteryOptimized = Boolean(caps.batteryOptimized);
+    return `
+      <div class="settings-row">
+        <span>Background message listener<small>Keep native Android service listening while app is closed</small></span>
+        <input type="checkbox" id="android-bg-toggle" ${bgOn ? 'checked' : ''}>
+      </div>
+      <div class="settings-row">
+        <span>Battery optimization<small id="android-battery-status">${batteryOptimized ? 'Battery saver may delay background alerts' : 'Unrestricted background delivery enabled'}</small></span>
+        <button class="secondary-btn" type="button" id="android-battery-btn">${batteryOptimized ? 'Allow background' : 'Settings'}</button>
+      </div>
+    `;
+  }
+  if (isNativeWindows()) {
+    const caps = getNativeCapabilities() || {};
+    return `
+      <div class="settings-row">
+        <span>Launch on Windows startup<small>Start Whisper automatically when you sign into Windows</small></span>
+        <input type="checkbox" id="win-startup-toggle" ${caps.launchOnStartup ? 'checked' : ''}>
+      </div>
+      <div class="settings-row">
+        <span>Keep running in system tray<small>Closing the window keeps Whisper listening in the tray</small></span>
+        <input type="checkbox" id="win-tray-toggle" ${caps.minimizeToTray !== false ? 'checked' : ''}>
+      </div>
+    `;
+  }
+  return '';
+}
+
 export function closeSettingsPage(fromPop = false) {
   const page = $('#settings-page');
   if (!page || page.classList.contains('hidden')) return;
@@ -328,10 +396,10 @@ export async function openSettingsPage({ onThemeChange, onSignOut }) {
             <option value="dark">Dark mode</option>
           </select>
         </div>
-        <div class="settings-row">
-          <span>Desktop &amp; push notifications<small>Alerts when Whisper is in the background</small></span>
-          <button class="secondary-btn" type="button" id="notify-enable">Enable</button>
+        <div class="settings-row" id="notify-settings-block">
+          ${renderNotificationSettingsInner()}
         </div>
+        ${renderPlatformExtraSettings()}
         <div class="settings-row">
           <span>Sound alerts<small>Play a tone for new messages</small></span>
           <input type="checkbox" id="sound-toggle" ${state.soundEnabled ? 'checked' : ''}>
@@ -402,18 +470,92 @@ export async function openSettingsPage({ onThemeChange, onSignOut }) {
     renderChats();
   };
 
-  $('#notify-enable', page).onclick = async () => {
-    if (!('Notification' in window)) {
-      showToast('Notifications are not supported in this browser');
-      return;
+  const wirePlatformSettings = () => {
+    const notifyBtn = $('#notify-enable', page);
+    if (notifyBtn) {
+      notifyBtn.onclick = async () => {
+        if (isNativeAndroid()) {
+          const caps = getNativeCapabilities() || {};
+          if (caps.notificationsGranted) {
+            openNativeNotificationSettings();
+          } else {
+            requestNativeNotifications();
+          }
+          return;
+        }
+        if (!('Notification' in window)) {
+          showToast('Notifications are not supported in this browser');
+          return;
+        }
+        const perm = await Notification.requestPermission();
+        if (perm === 'granted') {
+          const pushed = await api.registerWebPush().catch(() => false);
+          showToast(pushed ? 'Background push notifications enabled' : 'Browser notifications enabled');
+        } else {
+          showToast('Permission was not granted');
+        }
+      };
     }
-    const perm = await Notification.requestPermission();
-    if (perm === 'granted') {
-      const pushed = await api.registerWebPush().catch(() => false);
-      showToast(pushed ? 'Background push notifications enabled' : 'Browser notifications enabled');
-    } else {
-      showToast('Permission was not granted');
+
+    const testBtn = $('#notify-test-btn', page);
+    if (testBtn) {
+      testBtn.onclick = () => {
+        sendNativeTestNotification();
+        showToast('Sent native test notification');
+      };
     }
+
+    const bgToggle = $('#android-bg-toggle', page);
+    if (bgToggle) {
+      bgToggle.onchange = (e) => {
+        setNativeBackgroundSync(e.target.checked);
+        showToast(e.target.checked ? 'Android background listener enabled' : 'Android background listener paused');
+      };
+    }
+
+    const batteryBtn = $('#android-battery-btn', page);
+    if (batteryBtn) {
+      batteryBtn.onclick = () => requestIgnoreBatteryOptimizations();
+    }
+
+    const winStartupToggle = $('#win-startup-toggle', page);
+    if (winStartupToggle) {
+      winStartupToggle.onchange = (e) => {
+        setWindowsStartup(e.target.checked);
+        showToast(e.target.checked ? 'Will launch on Windows startup' : 'Removed from Windows startup');
+      };
+    }
+
+    const winTrayToggle = $('#win-tray-toggle', page);
+    if (winTrayToggle) {
+      winTrayToggle.onchange = (e) => {
+        setWindowsMinimizeToTray(e.target.checked);
+        showToast(e.target.checked ? 'Window closes to system tray' : 'Closing window exits Whisper');
+      };
+    }
+  };
+
+  wirePlatformSettings();
+  window.WhisperOnNativeCapsChanged = () => {
+    if (!isSettingsPageOpen()) return;
+    const block = $('#notify-settings-block', page);
+    if (block) block.innerHTML = renderNotificationSettingsInner();
+    const caps = getNativeCapabilities() || {};
+    const bgToggle = $('#android-bg-toggle', page);
+    if (bgToggle) bgToggle.checked = caps.backgroundSyncEnabled !== false;
+    const batStatus = $('#android-battery-status', page);
+    const batBtn = $('#android-battery-btn', page);
+    if (batStatus && batBtn) {
+      batStatus.textContent = caps.batteryOptimized
+        ? 'Battery saver may delay background alerts'
+        : 'Unrestricted background delivery enabled';
+      batBtn.textContent = caps.batteryOptimized ? 'Allow background' : 'Settings';
+    }
+    const winStartupToggle = $('#win-startup-toggle', page);
+    if (winStartupToggle) winStartupToggle.checked = Boolean(caps.launchOnStartup);
+    const winTrayToggle = $('#win-tray-toggle', page);
+    if (winTrayToggle) winTrayToggle.checked = caps.minimizeToTray !== false;
+    wirePlatformSettings();
   };
 
   // Reaction customization

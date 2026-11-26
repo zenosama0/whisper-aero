@@ -3,6 +3,9 @@ package com.whisperaero.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.DownloadManager
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -10,9 +13,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
@@ -48,6 +53,10 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val BASE_URL = "https://zenosama0.github.io/whisper-aero/"
+        private const val REQ_POST_NOTIFICATIONS = 1001
+
+        @Volatile
+        var isAppInForeground: Boolean = false
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -120,6 +129,7 @@ class MainActivity : AppCompatActivity() {
                     pendingChatFromIntent = null
                     openChatInWeb(targetChat)
                 }
+                notifyCapabilitiesChanged()
             }
         }
 
@@ -201,6 +211,7 @@ class MainActivity : AppCompatActivity() {
             BASE_URL
         }
         webView.loadUrl(initialUrl)
+        WhisperSyncService.syncState(this)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -214,12 +225,30 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        isAppInForeground = true
         if (::webView.isInitialized) {
             webView.onResume()
             webView.evaluateJavascript(
                 "if(typeof window.WhisperOnNativeResume==='function') window.WhisperOnNativeResume();",
                 null,
             )
+            notifyCapabilitiesChanged()
+        }
+    }
+
+    override fun onPause() {
+        isAppInForeground = false
+        super.onPause()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_POST_NOTIFICATIONS) {
+            notifyCapabilitiesChanged()
         }
     }
 
@@ -239,6 +268,22 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun notifyCapabilitiesChanged() {
+        if (!::webView.isInitialized) return
+        runOnUiThread {
+            webView.evaluateJavascript(
+                "if(typeof window.WhisperOnNativeCapsChanged==='function') window.WhisperOnNativeCapsChanged();",
+                null,
+            )
+        }
+    }
+
+    private fun isBatteryOptimized(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return !pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
@@ -247,7 +292,7 @@ class MainActivity : AppCompatActivity() {
                 ActivityCompat.requestPermissions(
                     this,
                     arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                    1001,
+                    REQ_POST_NOTIFICATIONS,
                 )
             }
         }
@@ -259,6 +304,107 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun getPlatform(): String = "android"
+
+        @JavascriptInterface
+        fun getCapabilities(): String {
+            return JSONObject()
+                .put("platform", "android")
+                .put("notificationsGranted", NotificationHelper.isPermissionGranted(this@MainActivity))
+                .put("backgroundSyncEnabled", SessionStore.isBackgroundSyncEnabled(this@MainActivity))
+                .put("batteryOptimized", isBatteryOptimized())
+                .toString()
+        }
+
+        @JavascriptInterface
+        fun requestNotificationPermission() {
+            runOnUiThread {
+                if (NotificationHelper.isPermissionGranted(this@MainActivity)) {
+                    openNotificationSettings()
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    ActivityCompat.requestPermissions(
+                        this@MainActivity,
+                        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                        REQ_POST_NOTIFICATIONS,
+                    )
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun openNotificationSettings() {
+            runOnUiThread {
+                val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                } else {
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+                }
+                startActivity(intent)
+            }
+        }
+
+        @JavascriptInterface
+        fun setBackgroundSyncEnabled(enabled: Boolean) {
+            SessionStore.setBackgroundSyncEnabled(this@MainActivity, enabled)
+            WhisperSyncService.syncState(this@MainActivity)
+            notifyCapabilitiesChanged()
+        }
+
+        @JavascriptInterface
+        fun requestIgnoreBatteryOptimizations() {
+            runOnUiThread {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    try {
+                        val intent = if (isBatteryOptimized()) {
+                            Intent(
+                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:$packageName"),
+                            )
+                        } else {
+                            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        }
+                        startActivity(intent)
+                    } catch (_: Exception) {
+                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                    }
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun sendTestNotification() {
+            NotificationHelper.showTest(this@MainActivity)
+        }
+
+        @JavascriptInterface
+        fun syncSession(json: String?) {
+            if (json.isNullOrBlank()) return
+            SessionStore.saveFromJson(this@MainActivity, json)
+            WhisperSyncService.syncState(this@MainActivity)
+        }
+
+        @JavascriptInterface
+        fun clearSession() {
+            SessionStore.clear(this@MainActivity)
+            WhisperSyncService.syncState(this@MainActivity)
+        }
+
+        @JavascriptInterface
+        fun copyToClipboard(text: String?) {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("Whisper", text ?: ""))
+        }
+
+        @JavascriptInterface
+        fun shareText(title: String?, text: String?) {
+            runOnUiThread {
+                val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                    putExtra(Intent.EXTRA_SUBJECT, title ?: "Whisper")
+                    putExtra(Intent.EXTRA_TEXT, text ?: "")
+                    type = "text/plain"
+                }
+                startActivity(Intent.createChooser(sendIntent, title ?: "Share via"))
+            }
+        }
 
         @JavascriptInterface
         fun showNotification(conversationId: String?, title: String?, body: String?, iconUrl: String?, tag: String?) {

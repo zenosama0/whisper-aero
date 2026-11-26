@@ -6,17 +6,22 @@ namespace WhisperAero;
 
 internal static class Program
 {
+    public const string ActivateEventName = @"Global\WhisperAeroActivateEvent";
+
     [STAThread]
     private static void Main()
     {
         using var mutex = new Mutex(true, @"Global\WhisperAeroSingleInstance", out var isNewInstance);
         if (!isNewInstance)
         {
-            MessageBox.Show(
-                "Whisper is already running. Check your system tray if the window is minimized.",
-                "Whisper",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            try
+            {
+                using var evt = EventWaitHandle.OpenExisting(ActivateEventName);
+                evt.Set();
+            }
+            catch
+            {
+            }
             return;
         }
 

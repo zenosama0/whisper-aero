@@ -1,7 +1,13 @@
-import { configured } from './config.js';
+import { config, configured, supabase } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=21';
-import { sendNativeNotification, syncNativeTheme } from './native.js?v=21';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=22';
+import {
+  clearNativeSession,
+  isNativeApp,
+  sendNativeNotification,
+  syncNativeSession,
+  syncNativeTheme,
+} from './native.js?v=22';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
@@ -170,6 +176,30 @@ function updateUserBadge() {
   }
 }
 
+async function pushNativeSession(providedSession = null) {
+  if (!isNativeApp() || !state.user?.id) return;
+  try {
+    const sess = providedSession || (await supabase?.auth?.getSession?.())?.data?.session;
+    if (!sess?.access_token) return;
+    syncNativeSession({
+      supabaseUrl: config.supabaseUrl,
+      anonKey: config.supabaseAnonKey,
+      accessToken: sess.access_token,
+      refreshToken: sess.refresh_token || '',
+      expiresAt: sess.expires_at || 0,
+      userId: state.user.id,
+      chats: state.chats.map((c) => ({
+        id: c.id,
+        peerId: c.peerId || '',
+        name: c.name || 'Whisper',
+        avatar: c.avatar || '',
+      })),
+    });
+  } catch {
+    // Ignore session sync failure
+  }
+}
+
 function getRealtimeHandlers() {
   return {
     onMessageEvent: handleMessageRealtime,
@@ -251,6 +281,7 @@ async function refreshInbox({ preserveActive = true } = {}) {
       }
 
       renderChats();
+      pushNativeSession();
       if (state.activeChatId) {
         updatePeerHeader();
       } else {
@@ -312,6 +343,7 @@ async function handleMessageRealtime(payload) {
             body: preview,
             icon: chat.avatar || '',
             tag: `whisper-msg-${chat.id}`,
+            messageId: msg.id,
           });
           if (!handledNative && 'Notification' in window && Notification.permission === 'granted') {
             new Notification(chat.name, {
@@ -485,9 +517,10 @@ async function enterCloud(user) {
       }
       history.replaceState(null, '', window.location.pathname);
     }
-    if ('Notification' in window && Notification.permission === 'granted') {
+    if (!isNativeApp() && 'Notification' in window && Notification.permission === 'granted') {
       api.registerWebPush().catch(() => {});
     }
+    pushNativeSession();
     startRealtime(user.id, getRealtimeHandlers());
   } catch (error) {
     activeUserId = null;
@@ -499,6 +532,7 @@ async function enterCloud(user) {
 async function handleSignOut() {
   try {
     stopRealtime();
+    clearNativeSession();
     await api.signOut();
     activeUserId = null;
     resetState();
@@ -1175,6 +1209,10 @@ function wireEvents() {
   });
 
   window.WhisperOnNativeResume = () => resumeSync();
+  window.WhisperOnNativeState = (nextState) => {
+    window.__WHISPER_WINDOWS_STATE__ = nextState || null;
+    window.WhisperOnNativeCapsChanged?.();
+  };
   window.WhisperOpenChat = (chatId) => {
     if (chatId) resumeSync({ forceChatId: String(chatId) });
   };
@@ -1236,13 +1274,18 @@ async function bootstrap() {
       showAuth('recovery');
     } else if (event === 'SIGNED_OUT') {
       stopRealtime();
+      clearNativeSession();
       activeUserId = null;
       isRecoveryFlow = false;
       resetState();
       showAuth('login');
     } else if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
-      if (isRecoveryFlow) showAuth('recovery');
-      else enterCloud(session.user);
+      if (isRecoveryFlow) {
+        showAuth('recovery');
+      } else {
+        enterCloud(session.user);
+        pushNativeSession(session);
+      }
     }
   });
 

@@ -10,12 +10,33 @@ export function isNativeApp() {
   return isNativeAndroid() || isNativeWindows();
 }
 
+export function getNativeCapabilities() {
+  if (isNativeAndroid()) {
+    try {
+      const raw = window.WhisperNative.getCapabilities?.();
+      return raw ? JSON.parse(raw) : { platform: 'android', notificationsGranted: true, backgroundSyncEnabled: true, batteryOptimized: false };
+    } catch {
+      return { platform: 'android', notificationsGranted: true, backgroundSyncEnabled: true, batteryOptimized: false };
+    }
+  }
+  if (isNativeWindows()) {
+    return window.__WHISPER_WINDOWS_STATE__ || {
+      platform: 'windows',
+      notificationsGranted: true,
+      launchOnStartup: false,
+      minimizeToTray: true,
+    };
+  }
+  return null;
+}
+
 export function sendNativeNotification({
   conversationId = '',
   title = 'Whisper',
   body = '',
   icon = '',
   tag = 'whisper',
+  messageId = '',
 } = {}) {
   try {
     if (isNativeAndroid()) {
@@ -36,11 +57,12 @@ export function sendNativeNotification({
         body: String(body || ''),
         icon: String(icon || ''),
         tag: String(tag || 'whisper'),
+        messageId: String(messageId || ''),
       });
       return true;
     }
   } catch {
-    // Ignore native bridge error and allow web Notification fallback
+    // Allow fallback to web notifications if host call throws
   }
   return false;
 }
@@ -73,4 +95,149 @@ export function syncNativeTheme(theme = 'aero') {
   } catch {
     // Ignore
   }
+}
+
+export function requestNativeNotifications() {
+  try {
+    if (isNativeAndroid()) {
+      window.WhisperNative.requestNotificationPermission?.();
+      return true;
+    }
+    if (isNativeWindows()) {
+      window.chrome.webview.postMessage({ type: 'testNotification' });
+      return true;
+    }
+  } catch {
+    // Ignore
+  }
+  return false;
+}
+
+export function openNativeNotificationSettings() {
+  try {
+    if (isNativeAndroid()) {
+      window.WhisperNative.openNotificationSettings?.();
+      return true;
+    }
+  } catch {
+    // Ignore
+  }
+  return false;
+}
+
+export function setNativeBackgroundSync(enabled) {
+  try {
+    if (isNativeAndroid()) {
+      window.WhisperNative.setBackgroundSyncEnabled?.(Boolean(enabled));
+      return true;
+    }
+  } catch {
+    // Ignore
+  }
+  return false;
+}
+
+export function requestIgnoreBatteryOptimizations() {
+  try {
+    if (isNativeAndroid()) {
+      window.WhisperNative.requestIgnoreBatteryOptimizations?.();
+      return true;
+    }
+  } catch {
+    // Ignore
+  }
+  return false;
+}
+
+export function sendNativeTestNotification() {
+  try {
+    if (isNativeAndroid()) {
+      window.WhisperNative.sendTestNotification?.();
+      return true;
+    }
+    if (isNativeWindows()) {
+      window.chrome.webview.postMessage({ type: 'testNotification' });
+      return true;
+    }
+  } catch {
+    // Ignore
+  }
+  return false;
+}
+
+export function setWindowsStartup(enabled) {
+  try {
+    if (isNativeWindows()) {
+      window.chrome.webview.postMessage({ type: 'setStartup', enabled: Boolean(enabled) });
+      return true;
+    }
+  } catch {
+    // Ignore
+  }
+  return false;
+}
+
+export function setWindowsMinimizeToTray(enabled) {
+  try {
+    if (isNativeWindows()) {
+      window.chrome.webview.postMessage({ type: 'setMinimizeToTray', enabled: Boolean(enabled) });
+      return true;
+    }
+  } catch {
+    // Ignore
+  }
+  return false;
+}
+
+export function syncNativeSession(payload) {
+  if (!payload?.accessToken || !payload?.userId) return;
+  try {
+    if (isNativeAndroid()) {
+      window.WhisperNative.syncSession?.(JSON.stringify(payload));
+    } else if (isNativeWindows()) {
+      window.chrome.webview.postMessage({ type: 'syncSession', payload });
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+export function clearNativeSession() {
+  try {
+    if (isNativeAndroid()) {
+      window.WhisperNative.clearSession?.();
+    } else if (isNativeWindows()) {
+      window.chrome.webview.postMessage({ type: 'clearSession' });
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+export function nativeCopyText(text) {
+  try {
+    if (isNativeAndroid() && typeof window.WhisperNative.copyToClipboard === 'function') {
+      window.WhisperNative.copyToClipboard(String(text || ''));
+      return true;
+    }
+    if (isNativeWindows()) {
+      window.chrome.webview.postMessage({ type: 'copy', text: String(text || '') });
+      return true;
+    }
+  } catch {
+    // Fall back to browser clipboard API
+  }
+  return false;
+}
+
+export function nativeShareText(title, text) {
+  try {
+    if (isNativeAndroid() && typeof window.WhisperNative.shareText === 'function') {
+      window.WhisperNative.shareText(String(title || 'Whisper'), String(text || ''));
+      return true;
+    }
+  } catch {
+    // Ignore
+  }
+  return false;
 }

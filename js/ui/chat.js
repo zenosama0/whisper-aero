@@ -1,5 +1,10 @@
 import * as api from '../api.js';
-import { clearNativeNotification } from '../native.js?v=21';
+import {
+  clearNativeNotification,
+  isNativeAndroid,
+  nativeCopyText,
+  nativeShareText,
+} from '../native.js?v=22';
 import {
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,
@@ -401,6 +406,12 @@ function openMessageMenu(msg, chat, anchorRect) {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
         <span>Copy</span>
       </button>
+      ${isNativeAndroid() && previewText ? `
+        <button type="button" data-menu-action="share">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/></svg>
+          <span>Share</span>
+        </button>
+      ` : ''}
       ${mine && !msg.file ? `
         <button type="button" data-menu-action="edit">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -484,12 +495,20 @@ function openMessageMenu(msg, chat, anchorRect) {
       if (action === 'reply') {
         startReplyTo(msg, chat);
       } else if (action === 'copy') {
-        try {
-          await navigator.clipboard.writeText(msg.text || msg.file?.name || '');
+        const textToCopy = msg.text || msg.file?.name || '';
+        if (nativeCopyText(textToCopy)) {
           showToast('Copied to clipboard');
-        } catch {
-          showToast('Copy is unavailable here');
+        } else {
+          try {
+            await navigator.clipboard.writeText(textToCopy);
+            showToast('Copied to clipboard');
+          } catch {
+            showToast('Copy is unavailable here');
+          }
         }
+        restoreKeyboardIfNeeded();
+      } else if (action === 'share') {
+        nativeShareText(chat?.name || 'Whisper', msg.text || msg.file?.name || '');
         restoreKeyboardIfNeeded();
       } else if (action === 'edit') {
         state.replyingTo = null;
