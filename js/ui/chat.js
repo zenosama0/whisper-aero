@@ -1,10 +1,11 @@
 import * as api from '../api.js';
 import {
   clearNativeNotification,
+  isBubbleWindow,
   isNativeAndroid,
   nativeCopyText,
   nativeShareText,
-} from '../native.js?v=23';
+} from '../native.js?v=24';
 import {
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,
@@ -206,8 +207,10 @@ export async function selectChat(chatId, { forceSync = false } = {}) {
     pushUiLayer('chat');
   }
 
-  // Clear OS & native notifications for this chat when opened
-  clearNativeNotification(chatId);
+  // Clear OS & native notifications for this chat when opened (skip inside floating bubble windows)
+  if (!isBubbleWindow()) {
+    clearNativeNotification(chatId);
+  }
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.ready
       .then((reg) => reg.getNotifications({ tag: `whisper-msg-${chatId}` }))

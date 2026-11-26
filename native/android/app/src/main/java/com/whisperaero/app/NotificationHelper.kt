@@ -285,6 +285,8 @@ object NotificationHelper {
                 // Floating Android Chat Bubble (API 29+ / 30+)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     val bubbleIntent = Intent(context, BubbleActivity::class.java).apply {
+                        action = Intent.ACTION_VIEW
+                        data = android.net.Uri.parse("whisperaero://bubble/${android.net.Uri.encode(conversationId)}")
                         putExtra(EXTRA_CHAT_ID, conversationId)
                     }
                     val bubbleFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

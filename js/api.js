@@ -50,6 +50,14 @@ export async function signInWithGoogle() {
   });
 }
 
+export async function signInWithGoogleIdToken(token, nonce) {
+  return supabase.auth.signInWithIdToken({
+    provider: 'google',
+    token,
+    nonce,
+  });
+}
+
 export async function refreshSession() {
   return supabase.auth.refreshSession();
 }

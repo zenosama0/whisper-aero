@@ -1,15 +1,17 @@
 import { config, configured, supabase } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=23';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=24';
 import {
   clearNativeSession,
   isBubbleWindow,
+  isNativeAndroid,
   isNativeApp,
   pushNativeChatShortcuts,
   sendNativeNotification,
+  startNativeGoogleSignIn,
   syncNativeSession,
   syncNativeTheme,
-} from './native.js?v=23';
+} from './native.js?v=24';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
@@ -732,6 +734,11 @@ function wireEvents() {
   });
   $('#auth-google-btn')?.addEventListener('click', async () => {
     authNotice('');
+    if (isNativeAndroid() && config.googleWebClientId) {
+      if (startNativeGoogleSignIn(config.googleWebClientId)) {
+        return;
+      }
+    }
     try {
       const { error } = await api.signInWithGoogle();
       if (error) throw error;
@@ -739,6 +746,29 @@ function wireEvents() {
       authNotice(error.message || 'Google sign-in is not configured yet.', true);
     }
   });
+
+  window.WhisperOnNativeGoogleToken = async (idToken, rawNonce) => {
+    try {
+      const { error } = await api.signInWithGoogleIdToken(idToken, rawNonce);
+      if (error) throw error;
+    } catch (error) {
+      authNotice(error.message || 'Could not complete Google sign-in.', true);
+    }
+  };
+
+  window.WhisperOnNativeGoogleError = async (errMsg) => {
+    if (errMsg === 'cancelled') return;
+    if (errMsg === 'missing_client_id' || /no credentials available/i.test(String(errMsg || ''))) {
+      try {
+        const { error } = await api.signInWithGoogle();
+        if (error) throw error;
+      } catch (error) {
+        authNotice(error.message || 'Google sign-in failed.', true);
+      }
+      return;
+    }
+    authNotice(errMsg || 'Google sign-in failed.', true);
+  };
   $$('#auth-reset-tabs [data-reset-tab]').forEach((tab) => {
     tab.onclick = () => {
       resetTab = tab.dataset.resetTab;
@@ -1284,7 +1314,7 @@ function wireEvents() {
 
   window.addEventListener('popstate', () => {
     if (!consumePopLayer()) return;
-    if (document.querySelector('.avatar-lightbox-backdrop')) {
+    if (document.querySelector('dialog.avatar-lightbox-dialog[open]')) {
       closeAvatarLightbox(true);
       return;
     }
@@ -1367,7 +1397,7 @@ function wireEvents() {
     }
   };
   window.WhisperHandleNativeBack = () => {
-    if (document.querySelector('.avatar-lightbox-backdrop')) {
+    if (document.querySelector('dialog.avatar-lightbox-dialog[open]')) {
       closeAvatarLightbox();
       return true;
     }
@@ -1406,6 +1436,9 @@ function wireEvents() {
 }
 
 async function bootstrap() {
+  if (isNativeAndroid()) {
+    document.body.classList.add('native-android');
+  }
   if (isBubbleWindow()) {
     document.body.classList.add('bubble-mode');
   }

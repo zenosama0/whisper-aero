@@ -1,5 +1,5 @@
 import * as api from '../api.js';
-import { searchEmojis } from '../emoji.js?v=23';
+import { searchEmojis } from '../emoji.js?v=24';
 import {
   getNativeCapabilities,
   isNativeAndroid,
@@ -12,7 +12,7 @@ import {
   setNativeBackgroundSync,
   setWindowsMinimizeToTray,
   setWindowsStartup,
-} from '../native.js?v=23';
+} from '../native.js?v=24';
 import {
   CHAT_THEME_PRESETS,
   DEFAULT_DOUBLE_TAP_EMOJI,
@@ -70,8 +70,10 @@ export function closeWorkspacePanel(fromPop = false) {
 }
 
 export function closeAvatarLightbox(fromPop = false) {
-  const existing = document.querySelector('.avatar-lightbox-backdrop');
+  const existing = document.querySelector('dialog.avatar-lightbox-dialog');
   if (!existing) return;
+  existing.dataset.closingFromPop = fromPop ? '1' : '';
+  if (existing.open) existing.close();
   existing.remove();
   if (!fromPop) popUiLayer();
 }
@@ -81,10 +83,10 @@ export function openAvatarLightbox(person) {
   closeAvatarLightbox(true);
   pushUiLayer('avatar');
 
-  const backdrop = document.createElement('div');
-  backdrop.className = 'avatar-lightbox-backdrop';
-  backdrop.innerHTML = `
-    <div class="avatar-lightbox-card" role="dialog" aria-modal="true" aria-label="${esc(person.name || 'Profile photo')}">
+  const dialog = document.createElement('dialog');
+  dialog.className = 'avatar-lightbox-dialog';
+  dialog.innerHTML = `
+    <div class="avatar-lightbox-card">
       <button type="button" class="avatar-lightbox-close" aria-label="Close photo">×</button>
       <div class="avatar-lightbox-media">
         ${person.avatar
@@ -98,22 +100,19 @@ export function openAvatarLightbox(person) {
     </div>
   `;
 
-  const onKey = (e) => {
-    if (e.key === 'Escape') {
-      document.removeEventListener('keydown', onKey);
-      closeAvatarLightbox();
-    }
-  };
-  document.addEventListener('keydown', onKey);
+  dialog.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    closeAvatarLightbox();
+  });
 
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop || e.target.closest('.avatar-lightbox-close')) {
-      document.removeEventListener('keydown', onKey);
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog || e.target.closest('.avatar-lightbox-close')) {
       closeAvatarLightbox();
     }
   });
 
-  document.body.append(backdrop);
+  document.body.append(dialog);
+  dialog.showModal();
 }
 
 function panelBackButtonHtml() {
@@ -389,6 +388,12 @@ export function openProfileModal(onProfileUpdated) {
   openModal(`
     <h2>Your profile</h2>
     <p>This name and photo appear in your conversations.</p>
+    <div class="profile-avatar-hero">
+      <button type="button" class="avatar-click-btn" id="profile-avatar-preview" aria-label="View your profile photo">
+        ${avatarMarkup(state.user, 'avatar-large')}
+      </button>
+      <small>Tap photo to enlarge</small>
+    </div>
     <label class="field-label">Display name</label>
     <input class="field" id="profile-name-input" maxlength="48" value="${esc(state.user.name)}">
     <label class="field-label">Username</label>
@@ -403,6 +408,8 @@ export function openProfileModal(onProfileUpdated) {
       <button class="primary-btn" type="button" id="save-profile">Save changes</button>
     </div>
   `);
+
+  $('#profile-avatar-preview')?.addEventListener('click', () => openAvatarLightbox(state.user));
 
   $('#save-profile').onclick = async () => {
     const displayName = $('#profile-name-input').value.trim();
@@ -651,7 +658,12 @@ export async function openSettingsPage({ onThemeChange, onChatThemeChange, onSig
       <div class="settings-card">
         <div class="settings-card-title">Account</div>
         <div class="settings-row">
-          <span>Signed in<small>@${esc(state.user.username)}</small></span>
+          <div class="account-row-user">
+            <button type="button" class="avatar-click-btn" id="settings-own-avatar" aria-label="View your profile photo">
+              ${avatarMarkup(state.user)}
+            </button>
+            <span>${esc(state.user.name || state.user.username)}<small>@${esc(state.user.username)}</small></span>
+          </div>
           <button class="secondary-btn" type="button" id="sign-out">Sign out</button>
         </div>
       </div>
@@ -659,6 +671,7 @@ export async function openSettingsPage({ onThemeChange, onChatThemeChange, onSig
   `;
 
   $('#settings-back-btn', page).onclick = () => closeSettingsPage();
+  $('#settings-own-avatar', page)?.addEventListener('click', () => openAvatarLightbox(state.user));
 
   const themeSelect = $('#theme-select', page);
   themeSelect.value = state.user.theme;

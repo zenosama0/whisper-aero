@@ -37,7 +37,16 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.credentials.CredentialManager
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.lifecycle.lifecycleScope
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.security.MessageDigest
+import java.security.SecureRandom
 
 class MainActivity : AppCompatActivity() {
 
@@ -95,8 +104,9 @@ class MainActivity : AppCompatActivity() {
                     or WindowInsetsCompat.Type.ime(),
             )
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            insets
+            WindowInsetsCompat.CONSUMED
         }
+        ViewCompat.requestApplyInsets(rootContainer)
 
         val cookieManager = CookieManager.getInstance()
         cookieManager.setAcceptCookie(true)
@@ -350,6 +360,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun randomHexNonce(): String {
+        val bytes = ByteArray(16)
+        SecureRandom().nextBytes(bytes)
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun sha256Hex(raw: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
     private inner class WhisperNativeBridge {
         @JavascriptInterface
         fun isNative(): Boolean = true
@@ -366,6 +387,57 @@ class MainActivity : AppCompatActivity() {
                 .put("batteryOptimized", isBatteryOptimized())
                 .put("bubblesEnabled", NotificationHelper.areBubblesEnabled(this@MainActivity))
                 .toString()
+        }
+
+        @JavascriptInterface
+        fun signInWithGoogle(webClientId: String?) {
+            val clientId = webClientId?.trim().orEmpty()
+            if (clientId.isEmpty()) {
+                runOnUiThread {
+                    webView.evaluateJavascript(
+                        "if(typeof window.WhisperOnNativeGoogleError==='function') window.WhisperOnNativeGoogleError('missing_client_id');",
+                        null,
+                    )
+                }
+                return
+            }
+
+            lifecycleScope.launch {
+                try {
+                    val rawNonce = randomHexNonce()
+                    val hashedNonce = sha256Hex(rawNonce)
+                    val googleIdOption = GetGoogleIdOption.Builder()
+                        .setFilterByAuthorizedAccounts(false)
+                        .setServerClientId(clientId)
+                        .setAutoSelectEnabled(false)
+                        .setNonce(hashedNonce)
+                        .build()
+                    val request = GetCredentialRequest.Builder()
+                        .addCredentialOption(googleIdOption)
+                        .build()
+
+                    val credentialManager = CredentialManager.create(this@MainActivity)
+                    val result = credentialManager.getCredential(this@MainActivity, request)
+                    val googleCred = GoogleIdTokenCredential.createFrom(result.credential.data)
+                    val qToken = JSONObject.quote(googleCred.idToken)
+                    val qNonce = JSONObject.quote(rawNonce)
+                    webView.evaluateJavascript(
+                        "if(typeof window.WhisperOnNativeGoogleToken==='function') window.WhisperOnNativeGoogleToken($qToken, $qNonce);",
+                        null,
+                    )
+                } catch (_: GetCredentialCancellationException) {
+                    webView.evaluateJavascript(
+                        "if(typeof window.WhisperOnNativeGoogleError==='function') window.WhisperOnNativeGoogleError('cancelled');",
+                        null,
+                    )
+                } catch (e: Exception) {
+                    val qErr = JSONObject.quote(e.message ?: "Native Google sign-in failed")
+                    webView.evaluateJavascript(
+                        "if(typeof window.WhisperOnNativeGoogleError==='function') window.WhisperOnNativeGoogleError($qErr);",
+                        null,
+                    )
+                }
+            }
         }
 
         @JavascriptInterface

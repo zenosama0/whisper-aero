@@ -10,6 +10,18 @@ export function isNativeApp() {
   return isNativeAndroid() || isNativeWindows();
 }
 
+export function startNativeGoogleSignIn(webClientId) {
+  try {
+    if (isNativeAndroid() && typeof window.WhisperNative.signInWithGoogle === 'function') {
+      window.WhisperNative.signInWithGoogle(String(webClientId || ''));
+      return true;
+    }
+  } catch {
+    // Fall back to standard OAuth
+  }
+  return false;
+}
+
 export function isBubbleWindow() {
   return typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('bubble') === '1';
 }
