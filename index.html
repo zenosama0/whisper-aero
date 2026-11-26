@@ -25,8 +25,50 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=13"><link rel="stylesheet" href="auth.css?v=13"><link rel="stylesheet" href="overrides.css?v=13">
+  <link rel="stylesheet" href="styles.css?v=14"><link rel="stylesheet" href="auth.css?v=14"><link rel="stylesheet" href="overrides.css?v=14">
   <title>Whisper | messages, made personal</title>
+  <script>
+    window.WHISPER_VERSION = '2026.11.26.14';
+    (function () {
+      async function checkForUpdate() {
+        try {
+          const res = await fetch('./version.json?t=' + Date.now(), { cache: 'no-store' });
+          if (!res.ok) return;
+          const data = await res.json();
+          const latest = data && data.version;
+          if (!latest || latest === window.WHISPER_VERSION) {
+            localStorage.setItem('whisper-app-version', window.WHISPER_VERSION);
+            return;
+          }
+          const guardKey = 'whisper-reloaded-' + latest;
+          if (sessionStorage.getItem(guardKey)) return;
+          sessionStorage.setItem(guardKey, '1');
+          localStorage.setItem('whisper-app-version', latest);
+          if ('caches' in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.filter((k) => k.startsWith('whisper-shell-')).map((k) => caches.delete(k)));
+          }
+          if ('serviceWorker' in navigator) {
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg) await reg.update().catch(() => {});
+          }
+          window.location.reload();
+        } catch {}
+      }
+      checkForUpdate();
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') checkForUpdate();
+      });
+      if ('serviceWorker' in navigator) {
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (refreshing) return;
+          refreshing = true;
+          window.location.reload();
+        });
+      }
+    })();
+  </script>
 </head>
 <body>
   <div class="desktop-glow" aria-hidden="true"></div>
@@ -49,5 +91,5 @@
   <dialog id="modal" class="modal"><form method="dialog" class="modal-card" id="modal-content"><button class="modal-x" value="cancel" aria-label="Close">×</button><div id="modal-body"></div></form></dialog>
   <div class="toast" id="toast" role="status"></div>
   <script src="./app-config.js"></script>
-  <script type="module" src="app.js?v=13"></script>
+  <script type="module" src="app.js?v=14"></script>
 </body></html>

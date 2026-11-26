@@ -200,8 +200,7 @@ export function renderSharedMedia() {
     const url = await api.getAttachmentUrl(id);
     if (!url || !btn.isConnected) return;
     if (type.startsWith('image/')) {
-      btn.style.backgroundImage = `url('${url}')`;
-      btn.textContent = '';
+      btn.innerHTML = `<img class="shared-thumb" src="${esc(url)}" alt="${esc(name)}" loading="lazy">`;
     }
     btn.onclick = () => openLightbox(url, type, name, id);
   });

@@ -1,11 +1,11 @@
-const CACHE = 'whisper-shell-v13';
+const CACHE = 'whisper-shell-v14';
 const FILES = [
   './',
   './index.html',
-  './styles.css?v=13',
-  './auth.css?v=13',
-  './overrides.css?v=13',
-  './app.js?v=13',
+  './styles.css?v=14',
+  './auth.css?v=14',
+  './overrides.css?v=14',
+  './app.js?v=14',
   './app-config.js',
   './manifest.webmanifest',
   './icon.svg',
@@ -13,7 +13,7 @@ const FILES = [
   './icon-192.png',
   './icon-512.png',
   './js/config.js',
-  './js/emoji.js',
+  './js/emoji.js?v=14',
   './js/utils.js',
   './js/state.js',
   './js/api.js',
@@ -21,7 +21,7 @@ const FILES = [
   './js/viewOnce.js',
   './js/ui/chat.js',
   './js/ui/modals.js',
-  './js/main.js',
+  './js/main.js?v=14',
 ];
 
 self.addEventListener('install', (event) => {
@@ -43,9 +43,10 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname.endsWith('/version.json')) return;
 
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: 'no-cache' })
       .then((response) => {
         if (response.ok) {
           const copy = response.clone();
@@ -67,8 +68,8 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title || 'Whisper', {
       body: data.body || 'You have a new notification.',
-      icon: './icon.svg',
-      badge: './icon.svg',
+      icon: './icon-192.png',
+      badge: './icon-192.png',
       tag: data.tag || 'whisper',
       renotify: true,
       vibrate: data.vibrate || [120],

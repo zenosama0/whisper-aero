@@ -544,6 +544,10 @@ body.dark .send-btn {
   background: #548c73;
 }
 
+body.dark .brand {
+  color: #e5eeeb;
+}
+
 body.dark .chat-banner {
   color: #b3c2bd;
   background: #202b29;
@@ -914,13 +918,20 @@ mark.search-hit {
   aspect-ratio: 1;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--surface);
-  background-size: cover;
-  background-position: center;
+  background-color: var(--surface);
+  padding: 0;
+  overflow: hidden;
   display: grid;
   place-items: center;
   font-size: 15px;
   color: #5b6d72;
+}
+
+.shared-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .lightbox-wrap {
@@ -1223,7 +1234,7 @@ body.dark .modal-tab,
 body.dark .view-once-btn,
 body.dark .shared-tile,
 body.dark .reaction-picker-pop {
-  background: #283532;
+  background-color: #283532;
   border-color: #3e4d49;
   color: #e5eeeb;
 }
