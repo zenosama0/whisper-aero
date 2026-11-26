@@ -11,6 +11,8 @@ import {
   formatTime,
   haptic,
   openModal,
+  popUiLayer,
+  pushUiLayer,
   showToast,
 } from '../utils.js';
 import { openViewOnceMedia } from '../viewOnce.js';
@@ -141,9 +143,21 @@ export async function selectChat(chatId) {
     closeChatSearch();
   }
 
+  const wasMobileOpen = $('#conversation').classList.contains('mobile-open');
   $('#empty-state').classList.add('hidden');
   $('#thread').classList.remove('hidden');
   $('#conversation').classList.add('mobile-open');
+  if (window.innerWidth <= 700 && !wasMobileOpen) {
+    pushUiLayer('chat');
+  }
+
+  // Clear OS notifications for this chat when opened
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.ready
+      .then((reg) => reg.getNotifications({ tag: `whisper-msg-${chatId}` }))
+      .then((list) => list.forEach((n) => n.close()))
+      .catch(() => {});
+  }
 
   updatePeerHeader();
   updateTypingBanner();
@@ -271,13 +285,17 @@ function startReplyTo(msg, chat) {
   $('#message-input')?.focus({ preventScroll: true });
 }
 
-function closeMessageMenu() {
-  document.querySelector('.msg-context-backdrop')?.remove();
+export function closeMessageMenu(fromPop = false) {
+  const existing = document.querySelector('.msg-context-backdrop');
+  if (!existing) return;
+  existing.remove();
+  if (!fromPop) popUiLayer();
 }
 
 function openMessageMenu(msg, chat, anchorRect) {
   if (!msg || msg.deletedAt) return;
   closeMessageMenu();
+  pushUiLayer('menu');
 
   const mine = msg.from === 'me';
   const backdrop = document.createElement('div');

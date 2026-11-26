@@ -143,7 +143,30 @@ Deno.serve(async (request) => {
       keys.privateKey,
     );
 
-    const payload = JSON.stringify({ title, body: msgBody, tag, url: "./" });
+    let senderIcon = "";
+    const { data: senderProfile } = await admin
+      .from("profiles")
+      .select("avatar_path")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (senderProfile?.avatar_path) {
+      const { data: signed } = await admin.storage
+        .from("profile-avatars")
+        .createSignedUrl(senderProfile.avatar_path, 86400);
+      if (signed?.signedUrl) senderIcon = signed.signedUrl;
+    }
+
+    const chatIdParam = UUID_RE.test(conversationId) ? conversationId : "";
+    const targetUrl = chatIdParam ? `./?chat=${chatIdParam}` : "./";
+    const payload = JSON.stringify({
+      title,
+      body: msgBody,
+      tag,
+      icon: senderIcon,
+      conversationId: chatIdParam,
+      url: targetUrl,
+    });
     let sent = 0;
 
     await Promise.all(

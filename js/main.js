@@ -1,12 +1,13 @@
 import { configured } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=14';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=15';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
   clearComposeContext,
   clearPendingAttachment,
   closeChatSearch,
+  closeMessageMenu,
   initChatUI,
   openChatSearch,
   renderAttachmentPreview,
@@ -29,10 +30,13 @@ import {
   $,
   $$,
   closeModal,
+  consumePopLayer,
   esc,
   formatTime,
   initials,
   playNotificationChime,
+  popUiLayer,
+  pushUiLayer,
   showToast,
 } from './utils.js';
 
@@ -40,6 +44,8 @@ let authMode = 'login';
 let resetTab = 'code';
 let mfaUseBackup = false;
 let pendingMfaFactorId = null;
+let pendingChatId = new URLSearchParams(window.location.search).get('chat') || '';
+let closingModalFromPop = false;
 let isRecoveryFlow = window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery');
 let activeUserId = null;
 let refreshPromise = null;
@@ -385,6 +391,14 @@ async function enterCloud(user) {
     setTheme(state.user.theme);
 
     await refreshInbox({ preserveActive: false });
+    if (pendingChatId) {
+      const targetId = pendingChatId;
+      pendingChatId = '';
+      if (getChat(targetId)) {
+        await selectChat(targetId);
+      }
+      history.replaceState(null, '', window.location.pathname);
+    }
     if ('Notification' in window && Notification.permission === 'granted') {
       api.registerWebPush().catch(() => {});
     }
@@ -789,10 +803,11 @@ function wireEvents() {
 
   const isEmojiTrayOpen = () => Boolean(emojiTray && !emojiTray.classList.contains('hidden'));
 
-  const closeEmojiTray = () => {
+  const closeEmojiTray = (fromPop = false) => {
     if (!emojiTray || emojiTray.classList.contains('hidden')) return;
     emojiTray.classList.add('hidden');
     if (emojiBtn) emojiBtn.innerHTML = EMOJI_ICON;
+    if (!fromPop && window.innerWidth <= 700) popUiLayer();
   };
 
   const openEmojiTray = () => {
@@ -800,6 +815,7 @@ function wireEvents() {
     if (window.innerWidth <= 700) {
       $('#message-input')?.blur();
       $('#emoji-search-input')?.blur();
+      if (emojiTray.classList.contains('hidden')) pushUiLayer('emoji');
     }
     if (emojiSearch) emojiSearch.value = '';
     renderEmojiGrid('');
@@ -883,12 +899,39 @@ function wireEvents() {
   $('#theme-toggle').onclick = () => setTheme(state.user.theme === 'dark' ? 'aero' : 'dark');
 
   $('#back-btn').onclick = () => {
-    closeEmojiTray();
-    $('#conversation').classList.remove('mobile-open');
-    $('#details').classList.add('hidden');
+    let popCount = 0;
+    if (isEmojiTrayOpen()) {
+      closeEmojiTray(true);
+      if (window.innerWidth <= 700) popCount++;
+    }
+    if (!$('#details').classList.contains('hidden')) {
+      $('#details').classList.add('hidden');
+      if (window.innerWidth <= 1050) popCount++;
+    }
+    if (state.chatSearch.open) {
+      closeChatSearch();
+      if (window.innerWidth <= 700) popCount++;
+    }
+    if ($('#conversation').classList.contains('mobile-open')) {
+      $('#conversation').classList.remove('mobile-open');
+      if (window.innerWidth <= 700) popCount++;
+    }
+    if (popCount > 0) popUiLayer(popCount);
   };
-  $('#details-close').onclick = () => $('#details').classList.add('hidden');
-  $('#more-btn').onclick = () => $('#details').classList.toggle('hidden');
+  $('#details-close').onclick = () => {
+    if (!$('#details').classList.contains('hidden')) {
+      $('#details').classList.add('hidden');
+      if (window.innerWidth <= 1050) popUiLayer();
+    }
+  };
+  $('#more-btn').onclick = () => {
+    const opening = $('#details').classList.contains('hidden');
+    $('#details').classList.toggle('hidden');
+    if (window.innerWidth <= 1050) {
+      if (opening) pushUiLayer('details');
+      else popUiLayer();
+    }
+  };
 
   $('#favorite-btn').onclick = async () => {
     const c = getActiveChat();
@@ -951,13 +994,23 @@ function wireEvents() {
   };
 
   $('#chat-search-btn').onclick = () => {
-    if (state.chatSearch.open) closeChatSearch();
-    else openChatSearch();
+    if (state.chatSearch.open) {
+      closeChatSearch();
+      if (window.innerWidth <= 700) popUiLayer();
+    } else {
+      openChatSearch();
+      if (window.innerWidth <= 700) pushUiLayer('search');
+    }
   };
   $('#chat-search-input')?.addEventListener('input', (e) => runChatSearch(e.target.value));
   $('#chat-search-prev')?.addEventListener('click', () => stepChatSearch(-1));
   $('#chat-search-next')?.addEventListener('click', () => stepChatSearch(1));
-  $('#chat-search-close')?.addEventListener('click', closeChatSearch);
+  $('#chat-search-close')?.addEventListener('click', () => {
+    if (state.chatSearch.open) {
+      closeChatSearch();
+      if (window.innerWidth <= 700) popUiLayer();
+    }
+  });
 
   $('#search').oninput = (e) => {
     state.query = e.target.value;
@@ -976,6 +1029,51 @@ function wireEvents() {
   $('#modal').addEventListener('click', (e) => {
     if (e.target === $('#modal')) closeModal();
   });
+
+  $('#modal').addEventListener('close', () => {
+    if (closingModalFromPop) {
+      closingModalFromPop = false;
+      return;
+    }
+    popUiLayer();
+  });
+
+  window.addEventListener('popstate', () => {
+    if (!consumePopLayer()) return;
+    if (document.querySelector('.msg-context-backdrop')) {
+      closeMessageMenu(true);
+      return;
+    }
+    if ($('#modal')?.open) {
+      closingModalFromPop = true;
+      closeModal();
+      return;
+    }
+    if (!$('#details').classList.contains('hidden') && window.innerWidth <= 1050) {
+      $('#details').classList.add('hidden');
+      return;
+    }
+    if (isEmojiTrayOpen()) {
+      closeEmojiTray(true);
+      return;
+    }
+    if (state.chatSearch.open) {
+      closeChatSearch();
+      return;
+    }
+    if ($('#conversation').classList.contains('mobile-open')) {
+      $('#conversation').classList.remove('mobile-open');
+    }
+  });
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      const chatId = event.data?.type === 'OPEN_CHAT' ? event.data.conversationId : '';
+      if (!chatId) return;
+      if (getChat(chatId)) selectChat(chatId);
+      else pendingChatId = chatId;
+    });
+  }
 
   document.addEventListener('visibilitychange', () => {
     const c = getActiveChat();

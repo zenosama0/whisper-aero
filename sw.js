@@ -1,11 +1,11 @@
-const CACHE = 'whisper-shell-v14';
+const CACHE = 'whisper-shell-v15';
 const FILES = [
   './',
   './index.html',
-  './styles.css?v=14',
-  './auth.css?v=14',
-  './overrides.css?v=14',
-  './app.js?v=14',
+  './styles.css?v=15',
+  './auth.css?v=15',
+  './overrides.css?v=15',
+  './app.js?v=15',
   './app-config.js',
   './manifest.webmanifest',
   './icon.svg',
@@ -13,7 +13,7 @@ const FILES = [
   './icon-192.png',
   './icon-512.png',
   './js/config.js',
-  './js/emoji.js?v=14',
+  './js/emoji.js?v=15',
   './js/utils.js',
   './js/state.js',
   './js/api.js',
@@ -21,7 +21,7 @@ const FILES = [
   './js/viewOnce.js',
   './js/ui/chat.js',
   './js/ui/modals.js',
-  './js/main.js?v=14',
+  './js/main.js?v=15',
 ];
 
 self.addEventListener('install', (event) => {
@@ -65,26 +65,58 @@ self.addEventListener('push', (event) => {
   } catch {
     data = {};
   }
-  event.waitUntil(
-    self.registration.showNotification(data.title || 'Whisper', {
-      body: data.body || 'You have a new notification.',
-      icon: './icon-192.png',
+
+  const conversationId = data.conversationId || '';
+  const tag = data.tag || (conversationId ? `whisper-msg-${conversationId}` : 'whisper');
+  const nextLine = String(data.body || 'You have a new notification.');
+
+  event.waitUntil((async () => {
+    const existing = await self.registration.getNotifications({ tag }).catch(() => []);
+    let lines = [];
+    if (existing.length) {
+      const prev = existing[0];
+      const prevLines = Array.isArray(prev.data?.lines)
+        ? prev.data.lines
+        : (prev.body ? prev.body.split('\n') : []);
+      lines = [...prevLines, nextLine].slice(-6);
+    } else {
+      lines = [nextLine];
+    }
+
+    const targetUrl = data.url || (conversationId ? `./?chat=${conversationId}` : './');
+    await self.registration.showNotification(data.title || 'Whisper', {
+      body: lines.join('\n'),
+      icon: data.icon || './icon-192.png',
       badge: './icon-192.png',
-      tag: data.tag || 'whisper',
+      tag,
       renotify: true,
       vibrate: data.vibrate || [120],
-      data: { url: data.url || './' },
-    }),
-  );
+      data: {
+        url: targetUrl,
+        conversationId,
+        lines,
+      },
+    });
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || './', self.location.origin).href;
+  const baseScope = self.registration.scope;
+  const rawUrl = event.notification.data?.url || './';
+  const target = new URL(rawUrl, baseScope).href;
+  const conversationId = event.notification.data?.conversationId || '';
+
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      const client = clients.find((c) => new URL(c.url).origin === self.location.origin);
-      return client ? (client.navigate(target), client.focus()) : self.clients.openWindow(target);
+      const client = clients.find((c) => c.url.startsWith(baseScope));
+      if (client) {
+        if (conversationId) {
+          client.postMessage({ type: 'OPEN_CHAT', conversationId });
+        }
+        return client.focus();
+      }
+      return self.clients.openWindow(target);
     }),
   );
 });

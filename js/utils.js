@@ -85,12 +85,45 @@ export function showToast(msg) {
   toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
 }
 
+let uiHistoryDepth = 0;
+let suppressPopCount = 0;
+
+export function pushUiLayer(name) {
+  try {
+    uiHistoryDepth++;
+    history.pushState({ whisperLayer: name, depth: uiHistoryDepth }, '');
+  } catch {
+    // Ignore history push errors in restricted contexts.
+  }
+}
+
+export function popUiLayer(count = 1) {
+  const n = Math.min(count, uiHistoryDepth);
+  if (n > 0 && history.state?.whisperLayer) {
+    uiHistoryDepth -= n;
+    suppressPopCount += n;
+    history.go(-n);
+  }
+}
+
+export function consumePopLayer() {
+  if (suppressPopCount > 0) {
+    suppressPopCount--;
+    return false;
+  }
+  if (uiHistoryDepth > 0) uiHistoryDepth--;
+  return true;
+}
+
 export function openModal(html) {
   const modal = $('#modal');
   const body = $('#modal-body');
   if (!modal || !body) return;
   body.innerHTML = html;
-  if (!modal.open) modal.showModal();
+  if (!modal.open) {
+    pushUiLayer('modal');
+    modal.showModal();
+  }
 }
 
 export function closeModal() {
