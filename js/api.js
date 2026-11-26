@@ -41,6 +41,104 @@ export async function signIn(email, password) {
   return supabase.auth.signInWithPassword({ email, password });
 }
 
+export async function signInWithGoogle() {
+  return supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: `${window.location.origin}${window.location.pathname}`,
+    },
+  });
+}
+
+export async function refreshSession() {
+  return supabase.auth.refreshSession();
+}
+
+export async function getMfaStatus() {
+  const [{ data: aal }, { data: factorsData, error: factorsError }] = await Promise.all([
+    supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
+    supabase.auth.mfa.listFactors(),
+  ]);
+  if (factorsError) throw factorsError;
+  const verifiedTotp = (factorsData?.totp || []).filter((f) => f.status === 'verified');
+  return {
+    currentLevel: aal?.currentLevel || 'aal1',
+    nextLevel: aal?.nextLevel || 'aal1',
+    totpFactors: verifiedTotp,
+    enabled: verifiedTotp.length > 0,
+  };
+}
+
+export async function enrollTotp() {
+  const { data: existing } = await supabase.auth.mfa.listFactors();
+  for (const factor of existing?.all || []) {
+    if (factor.factor_type === 'totp' && factor.status === 'unverified') {
+      await supabase.auth.mfa.unenroll({ factorId: factor.id }).catch(() => {});
+    }
+  }
+  const { data, error } = await supabase.auth.mfa.enroll({
+    factorType: 'totp',
+    friendlyName: 'Whisper Authenticator',
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function verifyTotp(factorId, code) {
+  const cleanCode = String(code || '').replace(/\s+/g, '');
+  const { data, error } = await supabase.auth.mfa.challengeAndVerify({
+    factorId,
+    code: cleanCode,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function unenrollTotp(factorId) {
+  const { data, error } = await supabase.auth.mfa.unenroll({ factorId });
+  if (error) throw error;
+  return data;
+}
+
+async function callAuthRecovery(payload, { requireAuth = true } = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    apikey: config.supabaseAnonKey,
+  };
+  if (requireAuth) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error('Sign in again to continue.');
+    headers.Authorization = `Bearer ${session.access_token}`;
+  }
+  const response = await fetch(`${config.supabaseUrl}/functions/v1/auth-recovery`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'Recovery request failed.');
+  return result;
+}
+
+export async function generateBackupCodes() {
+  return callAuthRecovery({ action: 'generate-codes' });
+}
+
+export async function getBackupCodesStatus() {
+  return callAuthRecovery({ action: 'codes-status' });
+}
+
+export async function consume2faBackupCode(code) {
+  return callAuthRecovery({ action: 'consume-2fa-backup', code });
+}
+
+export async function resetPasswordWithBackupCode({ identifier, code, newPassword }) {
+  return callAuthRecovery(
+    { action: 'reset-password-with-code', identifier, code, newPassword },
+    { requireAuth: false },
+  );
+}
+
 export async function requestPasswordReset(email) {
   return supabase.auth.resetPasswordForEmail(email, {
     redirectTo: `${window.location.origin}${window.location.pathname}`,

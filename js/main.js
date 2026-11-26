@@ -33,6 +33,9 @@ import {
 } from './utils.js';
 
 let authMode = 'login';
+let resetTab = 'code';
+let mfaUseBackup = false;
+let pendingMfaFactorId = null;
 let isRecoveryFlow = window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery');
 let activeUserId = null;
 let refreshPromise = null;
@@ -72,27 +75,53 @@ function showAuth(mode = 'login') {
     signup: 'Create your account',
     reset: 'Reset your password',
     recovery: 'Set a new password',
+    mfa: 'Two-factor check',
   };
   const descriptions = {
     login: 'Sign in to pick up where your conversations left off.',
     signup: 'A few details, then you can start chatting.',
-    reset: 'Enter your account email and we will send a reset link.',
+    reset: resetTab === 'code'
+      ? 'Reset instantly using one of your single-use backup codes (no email required).'
+      : 'Enter your account email to request a reset link.',
     recovery: 'Choose a new password with at least 8 characters.',
+    mfa: 'This account has optional 2FA enabled.',
   };
   const submits = {
     login: 'Sign in',
     signup: 'Create account',
-    reset: 'Send reset link',
+    reset: resetTab === 'code' ? 'Reset password' : 'Send reset link',
     recovery: 'Update password',
+    mfa: mfaUseBackup ? 'Unlock with backup code' : 'Verify code',
   };
 
   $('#auth-title').textContent = titles[mode] || titles.login;
   $('#auth-description').textContent = descriptions[mode] || descriptions.login;
+
+  $('#auth-oauth-wrap')?.classList.toggle('hidden', mode !== 'login' && mode !== 'signup');
+  $('#auth-reset-tabs')?.classList.toggle('hidden', mode !== 'reset');
   $('#auth-signup-fields').classList.toggle('hidden', mode !== 'signup');
-  $('#auth-email-field')?.classList.toggle('hidden', mode === 'recovery');
-  $('#auth-password-field')?.classList.toggle('hidden', mode === 'reset');
+  $('#auth-email-field')?.classList.toggle('hidden', !(mode === 'login' || mode === 'signup' || (mode === 'reset' && resetTab === 'email')));
+  $('#auth-password-field')?.classList.toggle('hidden', !(mode === 'login' || mode === 'signup' || mode === 'recovery'));
   $('#auth-confirm-field')?.classList.toggle('hidden', mode !== 'recovery');
+  $('#auth-reset-code-fields')?.classList.toggle('hidden', !(mode === 'reset' && resetTab === 'code'));
+  $('#auth-mfa-fields')?.classList.toggle('hidden', mode !== 'mfa');
   $('#auth-forgot')?.classList.toggle('hidden', mode !== 'login');
+
+  if (mode === 'reset') {
+    $$('#auth-reset-tabs [data-reset-tab]').forEach((tab) => {
+      tab.classList.toggle('active', tab.dataset.resetTab === resetTab);
+    });
+  }
+
+  if (mode === 'mfa') {
+    $('#auth-mfa-label').textContent = mfaUseBackup ? 'Single-use backup code' : '6-digit authenticator code';
+    $('#auth-mfa-backup-toggle').textContent = mfaUseBackup ? 'Use authenticator app' : 'Use backup code';
+    $('#auth-mfa-code').placeholder = mfaUseBackup ? 'XXXX-XXXX' : '123456';
+    $('#auth-mfa-code').inputMode = mfaUseBackup ? 'text' : 'numeric';
+    $('#auth-mfa-help').textContent = mfaUseBackup
+      ? 'Using a backup code will sign you in and disable 2FA until you re-enable it in Settings.'
+      : 'Open your authenticator app (Google Authenticator, Authy, 1Password) and enter the current code.';
+  }
 
   const pwLabel = $('label[for="auth-password"]');
   if (pwLabel) pwLabel.textContent = mode === 'recovery' ? 'New password' : 'Password';
@@ -102,7 +131,9 @@ function showAuth(mode = 'login') {
     ? 'New to Whisper? <b>Create an account</b>'
     : mode === 'signup'
       ? 'Already have an account? <b>Sign in</b>'
-      : 'Remembered your password? <b>Back to Sign in</b>';
+      : mode === 'mfa'
+        ? 'Wrong account? <b>Sign out</b>'
+        : 'Remembered your password? <b>Back to Sign in</b>';
   authNotice('');
 }
 
@@ -325,6 +356,14 @@ function handleRemoteTyping(conversationId, _peerId, isTyping) {
 async function enterCloud(user) {
   if (!user?.id || user.id === activeUserId) return;
   try {
+    const mfaStatus = await api.getMfaStatus();
+    if (mfaStatus.nextLevel === 'aal2' && mfaStatus.currentLevel !== 'aal2' && mfaStatus.totpFactors.length) {
+      pendingMfaFactorId = mfaStatus.totpFactors[0].id;
+      mfaUseBackup = false;
+      showAuth('mfa');
+      return;
+    }
+
     const profileData = await api.getProfile(user.id);
     activeUserId = user.id;
     state.user = {
@@ -454,8 +493,40 @@ function wireEvents() {
     onRefreshInbox: () => refreshInbox(),
   });
 
-  $('#auth-switch').onclick = () => showAuth(authMode === 'login' ? 'signup' : 'login');
-  $('#auth-forgot')?.addEventListener('click', () => showAuth('reset'));
+  $('#auth-switch').onclick = async () => {
+    if (authMode === 'mfa') {
+      await api.signOut().catch(() => {});
+      pendingMfaFactorId = null;
+      mfaUseBackup = false;
+      showAuth('login');
+      return;
+    }
+    showAuth(authMode === 'login' ? 'signup' : 'login');
+  };
+  $('#auth-forgot')?.addEventListener('click', () => {
+    resetTab = 'code';
+    showAuth('reset');
+  });
+  $('#auth-google-btn')?.addEventListener('click', async () => {
+    authNotice('');
+    try {
+      const { error } = await api.signInWithGoogle();
+      if (error) throw error;
+    } catch (error) {
+      authNotice(error.message || 'Google sign-in is not configured yet.', true);
+    }
+  });
+  $$('#auth-reset-tabs [data-reset-tab]').forEach((tab) => {
+    tab.onclick = () => {
+      resetTab = tab.dataset.resetTab;
+      showAuth('reset');
+    };
+  });
+  $('#auth-mfa-backup-toggle')?.addEventListener('click', () => {
+    mfaUseBackup = !mfaUseBackup;
+    $('#auth-mfa-code').value = '';
+    showAuth('mfa');
+  });
 
   let usernameCheckTimer = 0;
   $('#auth-username')?.addEventListener('input', (e) => {
@@ -482,11 +553,44 @@ function wireEvents() {
     const password = $('#auth-password').value;
     $('#auth-submit').disabled = true;
     try {
-      if (authMode === 'reset') {
-        if (!email) throw new Error('Enter your email address.');
-        const { error } = await api.requestPasswordReset(email);
-        if (error) throw error;
-        authNotice('Password reset link sent. Check your email inbox (and spam folder).');
+      if (authMode === 'mfa') {
+        const code = $('#auth-mfa-code')?.value.trim() || '';
+        if (!code) throw new Error('Enter your verification code.');
+        if (mfaUseBackup) {
+          await api.consume2faBackupCode(code);
+          const { data } = await api.refreshSession();
+          pendingMfaFactorId = null;
+          mfaUseBackup = false;
+          $('#auth-mfa-code').value = '';
+          showToast('Signed in with backup code. Re-enable 2FA anytime in Settings.');
+          await enterCloud(data?.user || (await api.getSession()).data.session?.user);
+        } else {
+          if (!pendingMfaFactorId) throw new Error('MFA session expired. Sign in again.');
+          await api.verifyTotp(pendingMfaFactorId, code);
+          const { data } = await api.refreshSession();
+          pendingMfaFactorId = null;
+          $('#auth-mfa-code').value = '';
+          await enterCloud(data?.user || (await api.getSession()).data.session?.user);
+        }
+      } else if (authMode === 'reset') {
+        if (resetTab === 'code') {
+          const identifier = $('#auth-reset-identifier')?.value.trim() || '';
+          const code = $('#auth-reset-code')?.value.trim() || '';
+          const newPassword = $('#auth-reset-new-password')?.value || '';
+          if (!identifier) throw new Error('Enter your email address or @username.');
+          if (!code) throw new Error('Enter a backup code.');
+          if (newPassword.length < 8) throw new Error('Choose a password with at least 8 characters.');
+          await api.resetPasswordWithBackupCode({ identifier, code, newPassword });
+          $('#auth-reset-code').value = '';
+          $('#auth-reset-new-password').value = '';
+          showAuth('login');
+          authNotice('Password updated! You can sign in with your new password now.');
+        } else {
+          if (!email) throw new Error('Enter your email address.');
+          const { error } = await api.requestPasswordReset(email);
+          if (error) throw error;
+          authNotice('Password reset link sent. Check your email inbox (and spam folder).');
+        }
       } else if (authMode === 'recovery') {
         const confirmPw = $('#auth-password-confirm')?.value || '';
         if (password.length < 8) throw new Error('Choose a password with at least 8 characters.');
@@ -513,14 +617,18 @@ function wireEvents() {
         const result = await api.signUp({ email, password, username, displayName });
         if (result.error) throw result.error;
         if (result.data.session) await enterCloud(result.data.user);
-        else authNotice('Check your email to confirm your account, then return here to sign in.');
+        else authNotice('Account created! Check your email to confirm (or disable Confirm Email in Supabase to skip email verification).');
       } else {
         const result = await api.signIn(email, password);
         if (result.error) throw result.error;
         await enterCloud(result.data.user);
       }
     } catch (error) {
-      authNotice(error.message || 'Sign-in failed. Please try again.', true);
+      const msg = error.message || 'Sign-in failed. Please try again.';
+      const friendly = /rate limit/i.test(msg)
+        ? 'Email sending is temporarily rate-limited. Use Google Sign-in, a Backup Code, or turn off "Confirm email" in Supabase Auth settings.'
+        : msg;
+      authNotice(friendly, true);
     } finally {
       $('#auth-submit').disabled = false;
     }

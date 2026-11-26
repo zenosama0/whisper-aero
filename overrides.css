@@ -1064,6 +1064,100 @@ mark.search-hit {
   color: #b64f49 !important;
 }
 
+/* Security modal: 2FA enrollment & backup codes */
+.security-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.security-heading {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #64777b;
+  margin-bottom: 4px;
+}
+
+.mfa-enroll-box {
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: center;
+}
+
+.mfa-qr-wrap {
+  display: inline-flex;
+  padding: 10px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid #e2eae8;
+  margin-bottom: 10px;
+}
+
+.mfa-qr-wrap img,
+.mfa-qr-wrap svg {
+  width: 156px;
+  height: 156px;
+  display: block;
+}
+
+.mfa-secret {
+  display: inline-block;
+  margin: 6px 0 10px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  background: rgba(111, 165, 145, 0.14);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: 1px;
+  word-break: break-all;
+}
+
+.backup-codes-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.backup-code-chip {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: 1px;
+}
+
+.backup-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+body.dark .mfa-enroll-box,
+body.dark .backup-code-chip {
+  background: #263330;
+  border-color: #3e4d49;
+  color: #e5eeeb;
+}
+
+body.dark .security-section {
+  border-color: #354440;
+}
+
+body.dark .security-heading {
+  color: #9fb1ab;
+}
+
 body.dark .people-card,
 body.dark .compose-context,
 body.dark .chat-search-bar {

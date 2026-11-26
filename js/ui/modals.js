@@ -271,7 +271,7 @@ export function openProfileModal(onProfileUpdated) {
   };
 }
 
-export function openSettingsModal({ onThemeChange, onSignOut }) {
+export async function openSettingsModal({ onThemeChange, onSignOut }) {
   openModal(`
     <h2>Settings</h2>
     <p>Make Whisper feel like yours.</p>
@@ -290,6 +290,19 @@ export function openSettingsModal({ onThemeChange, onSignOut }) {
     <div class="settings-row">
       <span>Sound alerts<small>Play a tone for new messages</small></span>
       <input type="checkbox" id="sound-toggle" ${state.soundEnabled ? 'checked' : ''}>
+    </div>
+    <div class="security-section">
+      <div class="security-heading">Security &amp; Recovery</div>
+      <div class="settings-row">
+        <span>Two-factor authentication<small id="mfa-status-text">Checking…</small></span>
+        <button class="secondary-btn" type="button" id="mfa-toggle-btn" disabled>…</button>
+      </div>
+      <div id="mfa-enroll-area" class="hidden"></div>
+      <div class="settings-row">
+        <span>Backup recovery codes<small id="backup-status-text">Checking…</small></span>
+        <button class="secondary-btn" type="button" id="backup-gen-btn" disabled>Generate</button>
+      </div>
+      <div id="backup-codes-area" class="hidden"></div>
     </div>
     <div class="settings-row">
       <span>Account<small>Signed in as @${esc(state.user.username)}</small></span>
@@ -320,4 +333,154 @@ export function openSettingsModal({ onThemeChange, onSignOut }) {
   $('#sign-out').onclick = async () => {
     await onSignOut?.();
   };
+
+  const renderBackupCodesBox = (codes, noticeText = 'Save these single-use codes somewhere safe. They work for 2FA recovery and instant password reset (no email needed).') => {
+    const area = $('#backup-codes-area');
+    if (!area) return;
+    area.classList.remove('hidden');
+    area.innerHTML = `
+      <div class="mfa-enroll-box">
+        <p style="margin:0 0 8px;text-align:left">${esc(noticeText)}</p>
+        <div class="backup-codes-grid">
+          ${codes.map((c) => `<div class="backup-code-chip">${esc(c)}</div>`).join('')}
+        </div>
+        <div class="backup-actions">
+          <button type="button" class="secondary-btn" id="backup-copy-btn">Copy all</button>
+          <button type="button" class="secondary-btn" id="backup-dl-btn">Download .txt</button>
+        </div>
+      </div>
+    `;
+    const textPayload = `Whisper Aero Backup Recovery Codes (@${state.user.username})\nEach code can be used once for 2FA or password reset.\n\n${codes.join('\n')}\n`;
+    $('#backup-copy-btn', area).onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(textPayload);
+        showToast('Backup codes copied');
+      } catch {
+        showToast('Copy unavailable — use Download .txt');
+      }
+    };
+    $('#backup-dl-btn', area).onclick = () => {
+      const blob = new Blob([textPayload], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `whisper-backup-codes-${state.user.username || 'account'}.txt`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    };
+  };
+
+  let currentRemaining = 0;
+
+  const refreshSecurityState = async () => {
+    const mfaText = $('#mfa-status-text');
+    const mfaBtn = $('#mfa-toggle-btn');
+    const backupText = $('#backup-status-text');
+    const backupBtn = $('#backup-gen-btn');
+    if (!mfaText || !mfaBtn || !backupText || !backupBtn) return;
+
+    try {
+      const [mfa, codesStatus] = await Promise.all([
+        api.getMfaStatus(),
+        api.getBackupCodesStatus().catch(() => ({ remaining: 0 })),
+      ]);
+
+      currentRemaining = codesStatus?.remaining || 0;
+      backupText.textContent = currentRemaining > 0
+        ? `${currentRemaining} unused code${currentRemaining === 1 ? '' : 's'} remaining`
+        : 'Not set up (recommended for password reset)';
+      backupBtn.textContent = currentRemaining > 0 ? 'Regenerate' : 'Generate';
+      backupBtn.disabled = false;
+
+      if (mfa.enabled) {
+        const factor = mfa.totpFactors[0];
+        mfaText.textContent = 'Enabled (Authenticator app)';
+        mfaBtn.textContent = 'Disable';
+        mfaBtn.disabled = false;
+        mfaBtn.onclick = async () => {
+          mfaBtn.disabled = true;
+          try {
+            await api.unenrollTotp(factor.id);
+            showToast('2FA disabled');
+            await refreshSecurityState();
+          } catch (error) {
+            mfaBtn.disabled = false;
+            showToast(error.message || 'Could not disable 2FA');
+          }
+        };
+      } else {
+        mfaText.textContent = 'Optional · Not enabled';
+        mfaBtn.textContent = 'Enable 2FA';
+        mfaBtn.disabled = false;
+        mfaBtn.onclick = async () => {
+          mfaBtn.disabled = true;
+          try {
+            const enrolled = await api.enrollTotp();
+            const area = $('#mfa-enroll-area');
+            area.classList.remove('hidden');
+            area.innerHTML = `
+              <div class="mfa-enroll-box">
+                <div class="mfa-qr-wrap"><img src="${esc(enrolled.totp.qr_code)}" alt="Scan QR code in your authenticator app"></div>
+                <p style="margin:0 0 6px">Scan with Google Authenticator, Authy, or 1Password, or enter key manually:</p>
+                <div class="mfa-secret">${esc(enrolled.totp.secret)}</div>
+                <input class="field auth-code-input" id="mfa-verify-input" inputmode="numeric" maxlength="8" placeholder="6-digit code">
+                <div class="backup-actions" style="margin-top:10px">
+                  <button type="button" class="secondary-btn" id="mfa-cancel-btn">Cancel</button>
+                  <button type="button" class="primary-btn" id="mfa-confirm-btn">Verify &amp; enable</button>
+                </div>
+              </div>
+            `;
+            $('#mfa-cancel-btn', area).onclick = () => {
+              area.classList.add('hidden');
+              area.innerHTML = '';
+              mfaBtn.disabled = false;
+            };
+            $('#mfa-confirm-btn', area).onclick = async () => {
+              const code = $('#mfa-verify-input', area).value.trim();
+              if (!/^\d{6}$/.test(code)) {
+                showToast('Enter the 6-digit code from your app');
+                return;
+              }
+              $('#mfa-confirm-btn', area).disabled = true;
+              try {
+                await api.verifyTotp(enrolled.id, code);
+                area.classList.add('hidden');
+                area.innerHTML = '';
+                showToast('2FA enabled!');
+                if (currentRemaining === 0) {
+                  const generated = await api.generateBackupCodes();
+                  renderBackupCodesBox(generated.codes, '2FA enabled! Save these single-use backup codes in case you lose your authenticator app or forget your password:');
+                }
+                await refreshSecurityState();
+              } catch (error) {
+                $('#mfa-confirm-btn', area).disabled = false;
+                showToast(error.message || 'Invalid verification code');
+              }
+            };
+          } catch (error) {
+            mfaBtn.disabled = false;
+            showToast(error.message || 'Could not start 2FA setup');
+          }
+        };
+      }
+
+      backupBtn.onclick = async () => {
+        backupBtn.disabled = true;
+        try {
+          const generated = await api.generateBackupCodes();
+          renderBackupCodesBox(generated.codes);
+          await refreshSecurityState();
+          showToast('New backup codes generated');
+        } catch (error) {
+          backupBtn.disabled = false;
+          showToast(error.message || 'Could not generate backup codes');
+        }
+      };
+    } catch {
+      mfaText.textContent = 'Unavailable';
+      backupText.textContent = 'Unavailable';
+    }
+  };
+
+  refreshSecurityState();
 }
