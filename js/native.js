@@ -10,13 +10,17 @@ export function isNativeApp() {
   return isNativeAndroid() || isNativeWindows();
 }
 
+export function isBubbleWindow() {
+  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('bubble') === '1';
+}
+
 export function getNativeCapabilities() {
   if (isNativeAndroid()) {
     try {
       const raw = window.WhisperNative.getCapabilities?.();
-      return raw ? JSON.parse(raw) : { platform: 'android', notificationsGranted: true, backgroundSyncEnabled: true, batteryOptimized: false };
+      return raw ? JSON.parse(raw) : { platform: 'android', notificationsGranted: true, backgroundSyncEnabled: true, batteryOptimized: false, bubblesEnabled: true };
     } catch {
-      return { platform: 'android', notificationsGranted: true, backgroundSyncEnabled: true, batteryOptimized: false };
+      return { platform: 'android', notificationsGranted: true, backgroundSyncEnabled: true, batteryOptimized: false, bubblesEnabled: true };
     }
   }
   if (isNativeWindows()) {
@@ -123,6 +127,33 @@ export function openNativeNotificationSettings() {
     // Ignore
   }
   return false;
+}
+
+export function openNativeBubbleSettings() {
+  try {
+    if (isNativeAndroid()) {
+      window.WhisperNative.openBubbleSettings?.();
+      return true;
+    }
+  } catch {
+    // Ignore
+  }
+  return false;
+}
+
+export function pushNativeChatShortcuts(chats) {
+  try {
+    if (isNativeAndroid() && typeof window.WhisperNative.pushChatShortcuts === 'function') {
+      const top = (chats || []).slice(0, 6).map((c) => ({
+        id: c.id,
+        name: c.name || 'Whisper',
+        avatar: c.avatar || '',
+      }));
+      window.WhisperNative.pushChatShortcuts(JSON.stringify(top));
+    }
+  } catch {
+    // Ignore
+  }
 }
 
 export function setNativeBackgroundSync(enabled) {

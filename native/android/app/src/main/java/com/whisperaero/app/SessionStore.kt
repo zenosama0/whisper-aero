@@ -142,6 +142,20 @@ object SessionStore {
         }
     }
 
+    fun getFirstChatId(context: Context): String? {
+        synchronized(lock) {
+            val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_CHATS, null)
+                ?: return null
+            return try {
+                val obj = JSONObject(raw)
+                val keys = obj.keys()
+                if (keys.hasNext()) keys.next() else null
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
     fun refreshAccessTokenIfNeeded(context: Context, client: OkHttpClient): NativeSession? {
         val current = getSession(context) ?: return null
         val nowSec = System.currentTimeMillis() / 1000L

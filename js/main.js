@@ -1,13 +1,15 @@
 import { config, configured, supabase } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=22';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=23';
 import {
   clearNativeSession,
+  isBubbleWindow,
   isNativeApp,
+  pushNativeChatShortcuts,
   sendNativeNotification,
   syncNativeSession,
   syncNativeTheme,
-} from './native.js?v=22';
+} from './native.js?v=23';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
@@ -29,12 +31,15 @@ import {
   updateTypingBanner,
 } from './ui/chat.js';
 import {
-  closeSettingsPage,
-  isSettingsPageOpen,
-  openFindPeopleModal,
+  closeAvatarLightbox,
+  closeWorkspacePanel,
+  getActiveWorkspacePanel,
+  openAvatarLightbox,
+  openPeoplePage,
   openProfileModal,
+  openRequestsPage,
   openSettingsPage,
-  renderRequestsModal,
+  refreshRequestsPageIfOpen,
 } from './ui/modals.js';
 import {
   $,
@@ -61,6 +66,7 @@ let activeUserId = null;
 let refreshPromise = null;
 let resumePromise = null;
 let lastResumeSyncAt = 0;
+let pendingSharedText = '';
 const typingTimers = new Map();
 
 const authGate = $('#auth-gate');
@@ -70,6 +76,47 @@ const authMessage = $('#auth-message');
 const MOON_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/></svg>';
 const SUN_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>';
 
+function applyChatTheme(theme = state.chatTheme) {
+  const rootStyle = document.documentElement.style;
+  const t = theme || {};
+  rootStyle.setProperty('--custom-mine-bg', t.mineBg || '');
+  rootStyle.setProperty('--custom-mine-text', t.mineText || '');
+  rootStyle.setProperty('--custom-theirs-bg', t.theirsBg || '');
+  rootStyle.setProperty('--custom-theirs-text', t.theirsText || '');
+  rootStyle.setProperty('--custom-chat-bg', t.bgImage ? `url("${t.bgImage}")` : 'none');
+  const dim = t.bgImage ? Math.max(0, Math.min(0.75, Number(t.bgDim) || 0)) : 0;
+  rootStyle.setProperty('--custom-chat-dim-rgba', `rgba(14, 20, 19, ${dim})`);
+  document.body.classList.toggle('has-custom-chat-bg', Boolean(t.bgImage));
+  document.body.classList.toggle('has-custom-mine-bubble', Boolean(t.mineBg));
+  document.body.classList.toggle('has-custom-theirs-bubble', Boolean(t.theirsBg));
+}
+
+function openDetailsPanel() {
+  const details = $('#details');
+  if (!details || !details.classList.contains('hidden')) return;
+  details.style.transform = '';
+  details.style.transition = '';
+  details.classList.remove('hidden');
+  if (window.innerWidth <= 1050) {
+    $('#details-backdrop')?.classList.remove('hidden');
+    pushUiLayer('details');
+  }
+}
+
+function closeDetailsPanel(fromPop = false) {
+  const details = $('#details');
+  if (!details || details.classList.contains('hidden')) return;
+  details.classList.add('hidden');
+  details.style.transform = '';
+  details.style.transition = '';
+  const bd = $('#details-backdrop');
+  if (bd) {
+    bd.classList.add('hidden');
+    bd.style.opacity = '';
+  }
+  if (!fromPop && window.innerWidth <= 1050) popUiLayer();
+}
+
 function setTheme(theme) {
   state.user.theme = theme;
   localStorage.setItem('whisper-theme', theme);
@@ -77,6 +124,7 @@ function setTheme(theme) {
   document.body.classList.toggle('minimal', theme === 'minimal');
   const toggle = $('#theme-toggle');
   if (toggle) toggle.innerHTML = theme === 'dark' ? SUN_ICON : MOON_ICON;
+  applyChatTheme();
   syncNativeTheme(theme);
 }
 
@@ -195,6 +243,7 @@ async function pushNativeSession(providedSession = null) {
         avatar: c.avatar || '',
       })),
     });
+    pushNativeChatShortcuts(state.chats);
   } catch {
     // Ignore session sync failure
   }
@@ -240,7 +289,8 @@ async function resumeSync({ forceChatId = '' } = {}) {
       }
       await refreshInbox({ preserveActive: true });
       if (forceChatId) {
-        closeSettingsPage(true);
+        closeWorkspacePanel(true);
+        closeDetailsPanel(true);
         if (getChat(forceChatId)) await selectChat(forceChatId, { forceSync: true });
         else pendingChatId = forceChatId;
       } else if (state.activeChatId) {
@@ -282,6 +332,7 @@ async function refreshInbox({ preserveActive = true } = {}) {
 
       renderChats();
       pushNativeSession();
+      refreshRequestsPageIfOpen();
       if (state.activeChatId) {
         updatePeerHeader();
       } else {
@@ -652,6 +703,15 @@ function wireEvents() {
   initChatUI({
     onChatSelected: (convId) => {
       joinConversationTyping(convId, state.user.id, handleRemoteTyping);
+      if (pendingSharedText) {
+        const input = $('#message-input');
+        if (input) {
+          input.value = input.value ? `${input.value}\n${pendingSharedText}` : pendingSharedText;
+          input.style.height = 'auto';
+          input.style.height = `${Math.min(110, input.scrollHeight)}px`;
+        }
+        pendingSharedText = '';
+      }
     },
     onRefreshInbox: () => refreshInbox(),
   });
@@ -998,19 +1058,38 @@ function wireEvents() {
     window.addEventListener('resize', syncViewport);
   }
 
-  $('#new-chat').onclick = $('#empty-add').onclick = $('#contacts-tab').onclick = () =>
-    openFindPeopleModal(() => refreshInbox());
-  $('#requests-tab').onclick = () => renderRequestsModal('incoming', () => refreshInbox());
+  $('#new-chat').onclick = $('#empty-add').onclick = () => openPeoplePage(() => refreshInbox());
+  $('#contacts-tab').onclick = () => {
+    if (getActiveWorkspacePanel() === 'people') closeWorkspacePanel();
+    else openPeoplePage(() => refreshInbox());
+  };
+  $('#requests-tab').onclick = () => {
+    if (getActiveWorkspacePanel() === 'requests') closeWorkspacePanel();
+    else openRequestsPage('incoming', () => refreshInbox());
+  };
   $('#profile-open').onclick = () => openProfileModal(updateUserBadge);
-  $('#chats-tab').onclick = () => closeSettingsPage();
+  $('#chats-tab').onclick = () => closeWorkspacePanel();
   $('#settings-open').onclick = () => {
-    if (isSettingsPageOpen()) {
-      closeSettingsPage();
+    if (getActiveWorkspacePanel() === 'settings') {
+      closeWorkspacePanel();
     } else {
-      openSettingsPage({ onThemeChange: setTheme, onSignOut: handleSignOut });
+      openSettingsPage({
+        onThemeChange: setTheme,
+        onChatThemeChange: () => applyChatTheme(),
+        onSignOut: handleSignOut,
+      });
     }
   };
   $('#theme-toggle').onclick = () => setTheme(state.user.theme === 'dark' ? 'aero' : 'dark');
+
+  $('#peer-avatar')?.addEventListener('click', () => {
+    const c = getActiveChat();
+    if (c) openAvatarLightbox(c);
+  });
+  $('#details-avatar')?.addEventListener('click', () => {
+    const c = getActiveChat();
+    if (c) openAvatarLightbox(c);
+  });
 
   $('#back-btn').onclick = () => {
     let popCount = 0;
@@ -1019,7 +1098,7 @@ function wireEvents() {
       if (window.innerWidth <= 700) popCount++;
     }
     if (!$('#details').classList.contains('hidden')) {
-      $('#details').classList.add('hidden');
+      closeDetailsPanel(true);
       if (window.innerWidth <= 1050) popCount++;
     }
     if (state.chatSearch.open) {
@@ -1032,20 +1111,71 @@ function wireEvents() {
     }
     if (popCount > 0) popUiLayer(popCount);
   };
-  $('#details-close').onclick = () => {
-    if (!$('#details').classList.contains('hidden')) {
-      $('#details').classList.add('hidden');
-      if (window.innerWidth <= 1050) popUiLayer();
-    }
-  };
+  $('#details-close').onclick = () => closeDetailsPanel();
+  $('#details-backdrop')?.addEventListener('click', () => closeDetailsPanel());
   $('#more-btn').onclick = () => {
-    const opening = $('#details').classList.contains('hidden');
-    $('#details').classList.toggle('hidden');
-    if (window.innerWidth <= 1050) {
-      if (opening) pushUiLayer('details');
-      else popUiLayer();
-    }
+    if ($('#details').classList.contains('hidden')) openDetailsPanel();
+    else closeDetailsPanel();
   };
+
+  // Swipe right to collapse profile drawer on mobile / tablet
+  const detailsDrawer = $('#details');
+  if (detailsDrawer) {
+    let dStartX = 0;
+    let dStartY = 0;
+    let dStartAt = 0;
+    let dDragging = false;
+    let dDelta = 0;
+
+    detailsDrawer.addEventListener('touchstart', (e) => {
+      if (window.innerWidth > 1050 || detailsDrawer.classList.contains('hidden') || e.touches.length !== 1) return;
+      dStartX = e.touches[0].clientX;
+      dStartY = e.touches[0].clientY;
+      dStartAt = Date.now();
+      dDragging = false;
+      dDelta = 0;
+      detailsDrawer.style.transition = 'none';
+    }, { passive: true });
+
+    detailsDrawer.addEventListener('touchmove', (e) => {
+      if (window.innerWidth > 1050 || detailsDrawer.classList.contains('hidden') || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - dStartX;
+      const dy = e.touches[0].clientY - dStartY;
+      if (!dDragging && dx > 12 && dx > Math.abs(dy) * 1.25) {
+        dDragging = true;
+      }
+      if (dDragging) {
+        dDelta = Math.max(0, dx);
+        detailsDrawer.style.transform = `translateX(${dDelta}px)`;
+        const bd = $('#details-backdrop');
+        if (bd) {
+          const w = Math.max(200, detailsDrawer.offsetWidth || 300);
+          bd.style.opacity = String(Math.max(0, 1 - dDelta / w));
+        }
+      }
+    }, { passive: true });
+
+    const endDrawerDrag = () => {
+      if (!dDragging) {
+        detailsDrawer.style.transition = '';
+        return;
+      }
+      dDragging = false;
+      const elapsed = Date.now() - dStartAt;
+      if (dDelta > 72 || (dDelta > 34 && elapsed < 220)) {
+        detailsDrawer.style.transition = 'transform 0.16s ease-out';
+        detailsDrawer.style.transform = 'translateX(100%)';
+        setTimeout(() => closeDetailsPanel(), 150);
+      } else {
+        detailsDrawer.style.transition = 'transform 0.18s ease-out';
+        detailsDrawer.style.transform = '';
+        const bd = $('#details-backdrop');
+        if (bd) bd.style.opacity = '';
+      }
+    };
+    detailsDrawer.addEventListener('touchend', endDrawerDrag, { passive: true });
+    detailsDrawer.addEventListener('touchcancel', endDrawerDrag, { passive: true });
+  }
 
   $('#favorite-btn').onclick = async () => {
     const c = getActiveChat();
@@ -1154,6 +1284,10 @@ function wireEvents() {
 
   window.addEventListener('popstate', () => {
     if (!consumePopLayer()) return;
+    if (document.querySelector('.avatar-lightbox-backdrop')) {
+      closeAvatarLightbox(true);
+      return;
+    }
     if (document.querySelector('.msg-context-backdrop')) {
       closeMessageMenu(true);
       return;
@@ -1163,12 +1297,12 @@ function wireEvents() {
       closeModal();
       return;
     }
-    if (isSettingsPageOpen()) {
-      closeSettingsPage(true);
+    if (getActiveWorkspacePanel()) {
+      closeWorkspacePanel(true);
       return;
     }
     if (!$('#details').classList.contains('hidden') && window.innerWidth <= 1050) {
-      $('#details').classList.add('hidden');
+      closeDetailsPanel(true);
       return;
     }
     if (isEmojiTrayOpen()) {
@@ -1216,7 +1350,27 @@ function wireEvents() {
   window.WhisperOpenChat = (chatId) => {
     if (chatId) resumeSync({ forceChatId: String(chatId) });
   };
+  window.WhisperReceiveSharedText = (text) => {
+    const clean = String(text || '').trim();
+    if (!clean) return;
+    if (getActiveChat()) {
+      const input = $('#message-input');
+      if (input) {
+        input.value = input.value ? `${input.value}\n${clean}` : clean;
+        input.style.height = 'auto';
+        input.style.height = `${Math.min(110, input.scrollHeight)}px`;
+        input.focus({ preventScroll: true });
+      }
+    } else {
+      pendingSharedText = clean;
+      showToast('Pick a chat to share text');
+    }
+  };
   window.WhisperHandleNativeBack = () => {
+    if (document.querySelector('.avatar-lightbox-backdrop')) {
+      closeAvatarLightbox();
+      return true;
+    }
     if (document.querySelector('.msg-context-backdrop')) {
       closeMessageMenu();
       return true;
@@ -1225,13 +1379,12 @@ function wireEvents() {
       closeModal();
       return true;
     }
-    if (isSettingsPageOpen()) {
-      closeSettingsPage();
+    if (getActiveWorkspacePanel()) {
+      closeWorkspacePanel();
       return true;
     }
     if (!$('#details').classList.contains('hidden') && window.innerWidth <= 1050) {
-      $('#details').classList.add('hidden');
-      popUiLayer();
+      closeDetailsPanel();
       return true;
     }
     if (isEmojiTrayOpen()) {
@@ -1253,7 +1406,11 @@ function wireEvents() {
 }
 
 async function bootstrap() {
+  if (isBubbleWindow()) {
+    document.body.classList.add('bubble-mode');
+  }
   setTheme(state.user.theme || 'aero');
+  applyChatTheme();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }

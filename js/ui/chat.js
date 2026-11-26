@@ -4,7 +4,7 @@ import {
   isNativeAndroid,
   nativeCopyText,
   nativeShareText,
-} from '../native.js?v=22';
+} from '../native.js?v=23';
 import {
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,

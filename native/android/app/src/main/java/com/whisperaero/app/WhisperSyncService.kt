@@ -40,6 +40,7 @@ class WhisperSyncService : Service() {
             } else {
                 context.stopService(intent)
             }
+            WhisperSyncWorker.schedule(context)
         }
 
         private fun isoNow(): String {

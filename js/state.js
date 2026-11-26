@@ -1,5 +1,47 @@
 export const DEFAULT_REACTION_PALETTE = ['✨', '😆', '💖', '😢', '😭', '💀', '💜'];
 export const DEFAULT_DOUBLE_TAP_EMOJI = '❤️';
+export const DEFAULT_CHAT_THEME = {
+  mineBg: '',
+  mineText: '',
+  theirsBg: '',
+  theirsText: '',
+  bgImage: '',
+  bgDim: 0.22,
+};
+export const CHAT_THEME_PRESETS = [
+  { id: 'default', label: 'Default', mineBg: '', theirsBg: '' },
+  { id: 'sage', label: 'Sage Glass', mineBg: '#2f7a64', theirsBg: '#f2f7f5' },
+  { id: 'dusk', label: 'Dusk Slate', mineBg: '#395b85', theirsBg: '#27313d' },
+  { id: 'sand', label: 'Warm Sand', mineBg: '#b86843', theirsBg: '#fbf4ee' },
+  { id: 'indigo', label: 'Midnight', mineBg: '#5b4dc7', theirsBg: '#222436' },
+  { id: 'rose', label: 'Rose Quartz', mineBg: '#a64d79', theirsBg: '#fdf2f7' },
+];
+
+function computeContrastText(hex) {
+  const clean = String(hex || '').replace('#', '');
+  if (!/^[0-9a-f]{6}$/i.test(clean)) return '';
+  const r = parseInt(clean.slice(0, 2), 16) / 255;
+  const g = parseInt(clean.slice(2, 4), 16) / 255;
+  const b = parseInt(clean.slice(4, 6), 16) / 255;
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return lum > 0.57 ? '#1d2a29' : '#f7fbfa';
+}
+
+function loadSavedChatTheme() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('whisper-chat-theme') || 'null');
+    if (raw && typeof raw === 'object') {
+      const merged = { ...DEFAULT_CHAT_THEME, ...raw };
+      if (merged.mineBg && !merged.mineText) merged.mineText = computeContrastText(merged.mineBg);
+      if (merged.theirsBg && !merged.theirsText) merged.theirsText = computeContrastText(merged.theirsBg);
+      merged.bgDim = Math.max(0, Math.min(0.75, Number(merged.bgDim) || 0));
+      return merged;
+    }
+  } catch {
+    // ignore malformed stored chat theme
+  }
+  return { ...DEFAULT_CHAT_THEME };
+}
 
 function loadSavedReactionPalette() {
   try {
@@ -46,9 +88,34 @@ export const state = {
   soundEnabled: savedSound,
   reactionPalette: loadSavedReactionPalette(),
   doubleTapEmoji: loadSavedDoubleTapEmoji(),
+  chatTheme: loadSavedChatTheme(),
   mediaUrlCache: new Map(),
   avatarUrlCache: new Map(),
 };
+
+export function setChatTheme(patch) {
+  const next = { ...state.chatTheme, ...patch };
+  if ('mineBg' in patch && !('mineText' in patch)) {
+    next.mineText = next.mineBg ? computeContrastText(next.mineBg) : '';
+  }
+  if ('theirsBg' in patch && !('theirsText' in patch)) {
+    next.theirsText = next.theirsBg ? computeContrastText(next.theirsBg) : '';
+  }
+  next.bgDim = Math.max(0, Math.min(0.75, Number(next.bgDim) || 0));
+  state.chatTheme = next;
+  try {
+    localStorage.setItem('whisper-chat-theme', JSON.stringify(next));
+  } catch {
+    // quota fallback if image is huge
+  }
+  return state.chatTheme;
+}
+
+export function resetChatTheme() {
+  state.chatTheme = { ...DEFAULT_CHAT_THEME };
+  localStorage.removeItem('whisper-chat-theme');
+  return state.chatTheme;
+}
 
 export function setReactionPalette(list) {
   const cleaned = Array.isArray(list)

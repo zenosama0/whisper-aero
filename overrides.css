@@ -1288,19 +1288,33 @@ body.dark .danger-btn {
     z-index: 25;
     display: block !important;
     overflow-y: auto;
-    box-shadow: -12px 0 40px rgba(24, 42, 44, 0.22), 0 0 0 100vw rgba(18, 30, 32, 0.32);
+    box-shadow: -12px 0 40px rgba(24, 42, 44, 0.24);
     padding-bottom: calc(24px + env(safe-area-inset-bottom));
+    touch-action: pan-y;
   }
 
   .details.hidden {
     display: none !important;
   }
+
+  .details-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(16, 26, 28, 0.36);
+    backdrop-filter: blur(2px);
+    z-index: 24;
+    transition: opacity 0.16s ease-out;
+  }
+
+  .details-backdrop.hidden {
+    display: none;
+  }
 }
 
 @media (max-width: 700px) {
   .topbar {
-    height: 54px;
-    padding: 0 14px;
+    height: calc(54px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 14px 0;
     gap: 10px;
   }
 
@@ -1937,13 +1951,17 @@ body.dark .emoji-cell:hover {
   }
 }
 
-/* Full-page Settings */
+/* Unified Full-Page Workspace Panels (Requests, People, Settings) */
+.workspace.panel-open > .sidebar,
+.workspace.panel-open > .conversation,
+.workspace.panel-open > .details,
 .workspace.settings-open > .sidebar,
 .workspace.settings-open > .conversation,
 .workspace.settings-open > .details {
   display: none !important;
 }
 
+.workspace-panel,
 .settings-page {
   flex: 1;
   min-width: 0;
@@ -1951,6 +1969,306 @@ body.dark .emoji-cell:hover {
   overflow-y: auto;
   background: var(--surface);
   padding: 24px 20px 36px;
+}
+
+.panel-card-padded {
+  padding: 16px 18px !important;
+}
+
+.panel-results-list {
+  max-height: none;
+  overflow: visible;
+}
+
+/* Interactive Avatar & Lightbox */
+#peer-avatar,
+#details-avatar {
+  cursor: pointer;
+}
+
+.avatar-lightbox-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(12, 20, 22, 0.72);
+  backdrop-filter: blur(8px);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.avatar-lightbox-card {
+  position: relative;
+  width: min(340px, 88vw);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 22px 20px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 24px 60px rgba(10, 18, 20, 0.36);
+}
+
+.avatar-lightbox-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+
+.avatar-lightbox-media {
+  width: min(240px, 68vw);
+  height: min(240px, 68vw);
+  border-radius: 50%;
+  overflow: hidden;
+  border: 3px solid var(--line);
+  display: grid;
+  place-items: center;
+  background: var(--surface);
+}
+
+.avatar-lightbox-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.avatar-lightbox-fallback {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 64px;
+  font-weight: 700;
+  color: #4f665a;
+}
+
+.avatar-lightbox-caption {
+  text-align: center;
+}
+
+.avatar-lightbox-caption strong {
+  display: block;
+  font-size: 16px;
+}
+
+.avatar-lightbox-caption small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Custom Chat Themes */
+.chat-theme-preview {
+  position: relative;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  background-size: cover;
+  background-position: center;
+  padding: 14px 12px;
+  margin: 8px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.chat-theme-preview-dim {
+  position: absolute;
+  inset: 0;
+  background: #0e1413;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ctp-bubble {
+  position: relative;
+  z-index: 1;
+  max-width: 82%;
+  padding: 8px 12px;
+  border-radius: 14px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  box-shadow: 0 2px 6px rgba(18, 30, 32, 0.12);
+}
+
+.ctp-bubble.theirs {
+  align-self: flex-start;
+  background: #ffffff;
+  color: #25313c;
+  border-bottom-left-radius: 4px;
+}
+
+.ctp-bubble.mine {
+  align-self: flex-end;
+  background: #d8eee4;
+  color: #1e332c;
+  border-bottom-right-radius: 4px;
+}
+
+.theme-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.theme-preset-pill {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.theme-preset-pill.active {
+  background: #3d856f;
+  border-color: #3d856f;
+  color: #ffffff;
+}
+
+.color-swatch-input {
+  width: 44px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+body.has-custom-chat-bg .conversation,
+body.has-custom-chat-bg .messages {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+body.has-custom-chat-bg #thread {
+  background-image: linear-gradient(var(--custom-chat-dim-rgba, rgba(0, 0, 0, 0.2)), var(--custom-chat-dim-rgba, rgba(0, 0, 0, 0.2))), var(--custom-chat-bg);
+  background-size: cover;
+  background-position: center;
+}
+
+body.has-custom-mine-bubble .message-row.mine .message-bubble {
+  background: var(--custom-mine-bg) !important;
+  color: var(--custom-mine-text, #f7fbfa) !important;
+}
+
+body.has-custom-theirs-bubble .message-row.theirs .message-bubble {
+  background: var(--custom-theirs-bg) !important;
+  color: var(--custom-theirs-text, #1d2a29) !important;
+}
+
+body.has-custom-chat-bg .message-meta {
+  color: #e9f2ef;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+/* Android Floating Bubble Compact Window */
+body.bubble-mode .topbar,
+body.bubble-mode .rail,
+body.bubble-mode .sidebar {
+  display: none !important;
+}
+
+body.bubble-mode .app-shell {
+  height: 100dvh;
+  max-width: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+body.bubble-mode .conversation {
+  position: relative;
+  inset: auto;
+  display: flex !important;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+}
+
+body.dark .workspace-panel,
+body.dark .settings-page {
+  background: #17201e;
+}
+
+body.dark .avatar-lightbox-card {
+  background: #202b29;
+  border-color: #34433f;
+  color: #e5eeeb;
+}
+
+body.dark .avatar-lightbox-close,
+body.dark .theme-preset-pill,
+body.dark .color-swatch-input,
+body.dark .chat-theme-preview {
+  background: #263330;
+  border-color: #3d4d48;
+  color: #e5eeeb;
+}
+
+body.dark .ctp-bubble.theirs {
+  background: #293633;
+  color: #e5eeeb;
+}
+
+body.dark .ctp-bubble.mine {
+  background: #344c40;
+  color: #e3eee7;
+}
+
+body.dark .settings-card,
+body.dark .settings-back-btn {
+  background: #202b29;
+  border-color: #34433f;
+  color: #e5eeeb;
+}
+
+body.dark .reaction-slot-btn,
+body.dark .settings-emoji-picker {
+  background: #263330;
+  border-color: #3d4d48;
+  color: #e5eeeb;
+}
+
+body.dark .reaction-slot-btn:hover {
+  background: #2e3e3a;
+}
+
+body.dark .reaction-slot-btn.editing {
+  background: #30473f;
+  border-color: #6ab59d;
+}
+
+@media (max-width: 700px) {
+  .workspace-panel,
+  .settings-page {
+    order: 1;
+    padding: 16px 14px 28px;
+  }
+
+  .panel-card-padded {
+    padding: 12px 14px !important;
+  }
+
+  .settings-card {
+    padding: 4px 14px;
+  }
 }
 
 .settings-page-inner {
@@ -2093,42 +2411,4 @@ body.dark .emoji-cell:hover {
 
 .settings-emoji-grid {
   max-height: 196px;
-}
-
-body.dark .settings-page {
-  background: #17201e;
-}
-
-body.dark .settings-card,
-body.dark .settings-back-btn {
-  background: #202b29;
-  border-color: #34433f;
-  color: #e5eeeb;
-}
-
-body.dark .reaction-slot-btn,
-body.dark .settings-emoji-picker {
-  background: #263330;
-  border-color: #3d4d48;
-  color: #e5eeeb;
-}
-
-body.dark .reaction-slot-btn:hover {
-  background: #2e3e3a;
-}
-
-body.dark .reaction-slot-btn.editing {
-  background: #30473f;
-  border-color: #6ab59d;
-}
-
-@media (max-width: 700px) {
-  .settings-page {
-    order: 1;
-    padding: 16px 14px 28px;
-  }
-
-  .settings-card {
-    padding: 4px 14px;
-  }
 }

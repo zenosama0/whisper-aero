@@ -11,12 +11,26 @@ android {
         applicationId = "com.whisperaero.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = (System.getenv("VERSION_CODE")?.toIntOrNull() ?: 22)
-        versionName = (System.getenv("VERSION_NAME") ?: "2026.11.27.22")
+        versionCode = (System.getenv("VERSION_CODE")?.toIntOrNull() ?: 23)
+        versionName = (System.getenv("VERSION_NAME") ?: "2026.11.27.23")
+    }
+
+    signingConfigs {
+        create("whisper") {
+            storeFile = file(System.getenv("ANDROID_KEYSTORE_PATH") ?: "whisper-signing.p12")
+            storeType = System.getenv("ANDROID_KEYSTORE_TYPE") ?: "PKCS12"
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "whisperaero-signing"
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "whisper"
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: "whisperaero-signing"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("whisper")
+        }
         release {
+            signingConfig = signingConfigs.getByName("whisper")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -40,6 +54,7 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.webkit:webkit:1.12.1")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("com.google.android.material:material:1.12.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

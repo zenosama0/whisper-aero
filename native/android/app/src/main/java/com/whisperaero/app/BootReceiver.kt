@@ -10,6 +10,8 @@ class BootReceiver : BroadcastReceiver() {
             intent.action == Intent.ACTION_MY_PACKAGE_REPLACED
         ) {
             WhisperSyncService.syncState(context)
+            WhisperSyncWorker.schedule(context)
+            WhisperSyncWorker.enqueueNow(context)
         }
     }
 }

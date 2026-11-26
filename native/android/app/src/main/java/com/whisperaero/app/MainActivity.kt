@@ -28,19 +28,24 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var rootContainer: FrameLayout
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var pendingChatFromIntent: String? = null
+    private var pendingSharedText: String? = null
 
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -62,14 +67,36 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         NotificationHelper.ensureChannels(this)
         requestNotificationPermissionIfNeeded()
 
         pendingChatFromIntent = extractChatId(intent)
+        pendingSharedText = extractSharedText(intent)
 
+        rootContainer = FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#EEF6F8"))
+        }
         webView = WebView(this)
-        setContentView(webView)
+        rootContainer.addView(
+            webView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        setContentView(rootContainer)
+
+        ViewCompat.setOnApplyWindowInsetsListener(rootContainer) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars()
+                    or WindowInsetsCompat.Type.displayCutout()
+                    or WindowInsetsCompat.Type.ime(),
+            )
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
 
         val cookieManager = CookieManager.getInstance()
         cookieManager.setAcceptCookie(true)
@@ -128,6 +155,11 @@ class MainActivity : AppCompatActivity() {
                 if (!targetChat.isNullOrBlank()) {
                     pendingChatFromIntent = null
                     openChatInWeb(targetChat)
+                }
+                val shared = pendingSharedText
+                if (!shared.isNullOrBlank()) {
+                    pendingSharedText = null
+                    deliverSharedText(shared)
                 }
                 notifyCapabilitiesChanged()
             }
@@ -212,6 +244,7 @@ class MainActivity : AppCompatActivity() {
         }
         webView.loadUrl(initialUrl)
         WhisperSyncService.syncState(this)
+        WhisperSyncWorker.schedule(this)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -220,6 +253,10 @@ class MainActivity : AppCompatActivity() {
         val chatId = extractChatId(intent)
         if (!chatId.isNullOrBlank()) {
             openChatInWeb(chatId)
+        }
+        val shared = extractSharedText(intent)
+        if (!shared.isNullOrBlank()) {
+            deliverSharedText(shared)
         }
     }
 
@@ -259,11 +296,26 @@ class MainActivity : AppCompatActivity() {
         return intent.data?.getQueryParameter("chat")
     }
 
+    private fun extractSharedText(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_SEND) return null
+        if (intent.type != "text/plain") return null
+        return intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
     private fun openChatInWeb(chatId: String) {
         if (!::webView.isInitialized) return
         val quoted = JSONObject.quote(chatId)
         webView.evaluateJavascript(
             "if(typeof window.WhisperOpenChat==='function') window.WhisperOpenChat($quoted);",
+            null,
+        )
+    }
+
+    private fun deliverSharedText(text: String) {
+        if (!::webView.isInitialized) return
+        val quoted = JSONObject.quote(text)
+        webView.evaluateJavascript(
+            "if(typeof window.WhisperReceiveSharedText==='function') window.WhisperReceiveSharedText($quoted);",
             null,
         )
     }
@@ -312,6 +364,7 @@ class MainActivity : AppCompatActivity() {
                 .put("notificationsGranted", NotificationHelper.isPermissionGranted(this@MainActivity))
                 .put("backgroundSyncEnabled", SessionStore.isBackgroundSyncEnabled(this@MainActivity))
                 .put("batteryOptimized", isBatteryOptimized())
+                .put("bubblesEnabled", NotificationHelper.areBubblesEnabled(this@MainActivity))
                 .toString()
         }
 
@@ -340,6 +393,32 @@ class MainActivity : AppCompatActivity() {
                 }
                 startActivity(intent)
             }
+        }
+
+        @JavascriptInterface
+        fun openBubbleSettings() {
+            runOnUiThread {
+                try {
+                    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        Intent(Settings.ACTION_APP_NOTIFICATION_BUBBLE_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                    } else {
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+                    }
+                    startActivity(intent)
+                } catch (_: Exception) {
+                    openNotificationSettings()
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun pushChatShortcuts(json: String?) {
+            if (json.isNullOrBlank()) return
+            NotificationHelper.publishShortcutsFromJson(this@MainActivity, json)
         }
 
         @JavascriptInterface
@@ -451,6 +530,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 val statusColor = if (isDark) Color.parseColor("#202B29") else Color.parseColor("#EEF6F8")
                 val navColor = if (isDark) Color.parseColor("#17201E") else Color.parseColor("#FFFFFF")
+                rootContainer.setBackgroundColor(statusColor)
                 @Suppress("DEPRECATION")
                 window.statusBarColor = statusColor
                 @Suppress("DEPRECATION")

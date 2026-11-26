@@ -58,7 +58,7 @@ jobs:
               rounded.save(os.path.join(out_dir, 'ic_launcher_round.png'))
           EOF
 
-      - name: Build Android Debug APK
+      - name: Build Signed Android APK
         working-directory: native/android
         env:
           VERSION_CODE: ${{ github.run_number }}
@@ -66,12 +66,12 @@ jobs:
           VERSION_NAME=$(python3 -c "import json; print(json.load(open('../../version.json'))['version'])")
           export VERSION_NAME
           export VERSION_CODE=$((20 + VERSION_CODE))
-          gradle assembleDebug --no-daemon
+          gradle assembleRelease --no-daemon
 
       - name: Stage APK artifact
         run: |
           mkdir -p dist-artifacts
-          cp native/android/app/build/outputs/apk/debug/app-debug.apk dist-artifacts/Whisper-Android.apk
+          cp native/android/app/build/outputs/apk/release/app-release.apk dist-artifacts/Whisper-Android.apk
 
       - uses: actions/upload-artifact@v4
         with:

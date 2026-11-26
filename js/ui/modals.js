@@ -1,9 +1,10 @@
 import * as api from '../api.js';
-import { searchEmojis } from '../emoji.js?v=22';
+import { searchEmojis } from '../emoji.js?v=23';
 import {
   getNativeCapabilities,
   isNativeAndroid,
   isNativeWindows,
+  openNativeBubbleSettings,
   openNativeNotificationSettings,
   requestIgnoreBatteryOptimizations,
   requestNativeNotifications,
@@ -11,10 +12,13 @@ import {
   setNativeBackgroundSync,
   setWindowsMinimizeToTray,
   setWindowsStartup,
-} from '../native.js?v=22';
+} from '../native.js?v=23';
 import {
+  CHAT_THEME_PRESETS,
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,
+  resetChatTheme,
+  setChatTheme,
   setDoubleTapEmoji,
   setReactionPalette,
   state,
@@ -22,50 +26,166 @@ import {
 import { $, avatarMarkup, closeModal, esc, openModal, popUiLayer, pushUiLayer, showToast } from '../utils.js';
 import { renderChats, selectChat } from './chat.js';
 
-export function renderRequestsModal(activeTab = 'incoming', onRefreshInbox) {
-  const incoming = state.incomingRequests || [];
-  const outgoing = state.outgoingRequests || [];
-  const list = activeTab === 'incoming' ? incoming : outgoing;
+const PANEL_CONFIGS = {
+  requests: { pageId: '#requests-page', tabId: '#requests-tab' },
+  people: { pageId: '#people-page', tabId: '#contacts-tab' },
+  settings: { pageId: '#settings-page', tabId: '#settings-open' },
+};
 
-  openModal(`
-    <h2>Friend requests</h2>
-    <p>Confirm incoming requests or manage requests you sent.</p>
-    <div class="modal-tabs">
-      <button type="button" class="modal-tab ${activeTab === 'incoming' ? 'active' : ''}" data-req-tab="incoming">Incoming (${incoming.length})</button>
-      <button type="button" class="modal-tab ${activeTab === 'outgoing' ? 'active' : ''}" data-req-tab="outgoing">Sent (${outgoing.length})</button>
-    </div>
-    <div class="people-results">
-      ${list.length
-        ? list
-            .map((r) => `
-              <div class="request-card">
-                ${avatarMarkup(r)}
-                <div class="request-person">
-                  <strong>${esc(r.name)}</strong>
-                  <small>@${esc(r.username)} · ${esc(r.text)}</small>
-                </div>
-                ${activeTab === 'incoming'
-                  ? `<button type="button" class="accept" data-accept="${esc(r.id)}">Confirm</button><button type="button" data-decline="${esc(r.id)}" aria-label="Decline">×</button>`
-                  : `<button type="button" data-cancel="${esc(r.id)}">Cancel</button>`}
-              </div>
-            `)
-            .join('')
-        : `<p class="people-empty">${activeTab === 'incoming' ? 'No incoming friend requests.' : 'No pending sent requests.'}</p>`}
-    </div>
-    <div class="modal-actions"><button class="secondary-btn" value="cancel">Done</button></div>
-  `);
+let lastRequestsTab = 'incoming';
+let lastRefreshCb = null;
 
-  $('#modal-body').querySelectorAll('[data-req-tab]').forEach((btn) => {
-    btn.onclick = () => renderRequestsModal(btn.dataset.reqTab, onRefreshInbox);
+export function getActiveWorkspacePanel() {
+  for (const [key, cfg] of Object.entries(PANEL_CONFIGS)) {
+    const el = $(cfg.pageId);
+    if (el && !el.classList.contains('hidden')) return key;
+  }
+  return null;
+}
+
+function activateWorkspacePanel(key) {
+  const hadPanel = Boolean(getActiveWorkspacePanel());
+  Object.entries(PANEL_CONFIGS).forEach(([k, cfg]) => {
+    const el = $(cfg.pageId);
+    const tab = $(cfg.tabId);
+    const active = k === key;
+    el?.classList.toggle('hidden', !active);
+    tab?.classList.toggle('selected', active);
+  });
+  $('#chats-tab')?.classList.remove('selected');
+  $('.workspace')?.classList.add('panel-open');
+  $('.workspace')?.classList.toggle('settings-open', key === 'settings');
+  if (!hadPanel) pushUiLayer(key);
+}
+
+export function closeWorkspacePanel(fromPop = false) {
+  if (!getActiveWorkspacePanel()) return;
+  Object.values(PANEL_CONFIGS).forEach((cfg) => {
+    $(cfg.pageId)?.classList.add('hidden');
+    $(cfg.tabId)?.classList.remove('selected');
+  });
+  $('.workspace')?.classList.remove('panel-open', 'settings-open');
+  $('#chats-tab')?.classList.add('selected');
+  if (!fromPop) popUiLayer();
+}
+
+export function closeAvatarLightbox(fromPop = false) {
+  const existing = document.querySelector('.avatar-lightbox-backdrop');
+  if (!existing) return;
+  existing.remove();
+  if (!fromPop) popUiLayer();
+}
+
+export function openAvatarLightbox(person) {
+  if (!person) return;
+  closeAvatarLightbox(true);
+  pushUiLayer('avatar');
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'avatar-lightbox-backdrop';
+  backdrop.innerHTML = `
+    <div class="avatar-lightbox-card" role="dialog" aria-modal="true" aria-label="${esc(person.name || 'Profile photo')}">
+      <button type="button" class="avatar-lightbox-close" aria-label="Close photo">×</button>
+      <div class="avatar-lightbox-media">
+        ${person.avatar
+          ? `<img src="${esc(person.avatar)}" alt="${esc(person.name || '')}">`
+          : `<div class="avatar-lightbox-fallback" style="background:${esc(person.color || '#dce8e2')}">${esc(person.initial || (person.name || '?').slice(0, 2).toUpperCase())}</div>`}
+      </div>
+      <div class="avatar-lightbox-caption">
+        <strong>${esc(person.name || 'Whisper user')}</strong>
+        ${person.username ? `<small>@${esc(person.username)}</small>` : ''}
+      </div>
+    </div>
+  `;
+
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      document.removeEventListener('keydown', onKey);
+      closeAvatarLightbox();
+    }
+  };
+  document.addEventListener('keydown', onKey);
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop || e.target.closest('.avatar-lightbox-close')) {
+      document.removeEventListener('keydown', onKey);
+      closeAvatarLightbox();
+    }
   });
 
-  $('#modal-body').querySelectorAll('[data-accept]').forEach((btn) => {
+  document.body.append(backdrop);
+}
+
+function panelBackButtonHtml() {
+  return `
+    <button type="button" class="settings-back-btn" data-panel-back aria-label="Back to chats">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+    </button>
+  `;
+}
+
+export function openRequestsPage(activeTab = lastRequestsTab, onRefreshInbox = lastRefreshCb) {
+  lastRequestsTab = activeTab === 'outgoing' ? 'outgoing' : 'incoming';
+  if (onRefreshInbox) lastRefreshCb = onRefreshInbox;
+
+  const page = $('#requests-page');
+  if (!page) return;
+  activateWorkspacePanel('requests');
+
+  const incoming = state.incomingRequests || [];
+  const outgoing = state.outgoingRequests || [];
+  const list = lastRequestsTab === 'incoming' ? incoming : outgoing;
+
+  page.innerHTML = `
+    <div class="settings-page-inner">
+      <div class="settings-page-head">
+        ${panelBackButtonHtml()}
+        <div>
+          <h2>Friend requests</h2>
+          <p>Confirm incoming requests or manage requests you sent.</p>
+        </div>
+      </div>
+
+      <div class="settings-card panel-card-padded">
+        <div class="modal-tabs" style="margin:0 0 12px">
+          <button type="button" class="modal-tab ${lastRequestsTab === 'incoming' ? 'active' : ''}" data-req-tab="incoming">Incoming (${incoming.length})</button>
+          <button type="button" class="modal-tab ${lastRequestsTab === 'outgoing' ? 'active' : ''}" data-req-tab="outgoing">Sent (${outgoing.length})</button>
+        </div>
+        <div class="people-results panel-results-list">
+          ${list.length
+            ? list
+                .map((r) => `
+                  <div class="request-card">
+                    ${avatarMarkup(r)}
+                    <div class="request-person">
+                      <strong>${esc(r.name)}</strong>
+                      <small>@${esc(r.username)} · ${esc(r.text)}</small>
+                    </div>
+                    ${lastRequestsTab === 'incoming'
+                      ? `<button type="button" class="accept" data-accept="${esc(r.id)}">Confirm</button><button type="button" data-decline="${esc(r.id)}" aria-label="Decline">×</button>`
+                      : `<button type="button" data-cancel="${esc(r.id)}">Cancel</button>`}
+                  </div>
+                `)
+                .join('')
+            : `<p class="people-empty">${lastRequestsTab === 'incoming' ? 'No incoming friend requests.' : 'No pending sent requests.'}</p>`}
+        </div>
+      </div>
+    </div>
+  `;
+
+  page.querySelector('[data-panel-back]').onclick = () => closeWorkspacePanel();
+
+  page.querySelectorAll('[data-req-tab]').forEach((btn) => {
+    btn.onclick = () => openRequestsPage(btn.dataset.reqTab, onRefreshInbox);
+  });
+
+  page.querySelectorAll('[data-accept]').forEach((btn) => {
     btn.onclick = async () => {
       btn.disabled = true;
       try {
         const convId = await api.acceptContactRequest(btn.dataset.accept);
         await onRefreshInbox?.();
-        closeModal();
+        closeWorkspacePanel();
         if (convId) await selectChat(convId);
         showToast('Friend request accepted');
       } catch (error) {
@@ -75,13 +195,13 @@ export function renderRequestsModal(activeTab = 'incoming', onRefreshInbox) {
     };
   });
 
-  $('#modal-body').querySelectorAll('[data-decline]').forEach((btn) => {
+  page.querySelectorAll('[data-decline]').forEach((btn) => {
     btn.onclick = async () => {
       btn.disabled = true;
       try {
         await api.declineContactRequest(btn.dataset.decline);
         await onRefreshInbox?.();
-        renderRequestsModal('incoming', onRefreshInbox);
+        openRequestsPage('incoming', onRefreshInbox);
         showToast('Request declined');
       } catch (error) {
         btn.disabled = false;
@@ -90,13 +210,13 @@ export function renderRequestsModal(activeTab = 'incoming', onRefreshInbox) {
     };
   });
 
-  $('#modal-body').querySelectorAll('[data-cancel]').forEach((btn) => {
+  page.querySelectorAll('[data-cancel]').forEach((btn) => {
     btn.onclick = async () => {
       btn.disabled = true;
       try {
         await api.cancelFriendRequest(btn.dataset.cancel);
         await onRefreshInbox?.();
-        renderRequestsModal('outgoing', onRefreshInbox);
+        openRequestsPage('outgoing', onRefreshInbox);
         showToast('Friend request cancelled');
       } catch (error) {
         btn.disabled = false;
@@ -106,20 +226,42 @@ export function renderRequestsModal(activeTab = 'incoming', onRefreshInbox) {
   });
 }
 
-export function openFindPeopleModal(onRefreshInbox) {
-  openModal(`
-    <h2>Find people</h2>
-    <p>Search by display name or @username to add friends.</p>
-    <label class="field-label" for="people-search">Search people</label>
-    <input class="field" id="people-search" placeholder="Name or @username" autocomplete="off" maxlength="48">
-    <div class="people-results" id="people-results" aria-live="polite">
-      <div class="people-empty">Type at least two characters to search.</div>
-    </div>
-    <div class="modal-actions"><button class="secondary-btn" value="cancel">Done</button></div>
-  `);
+export function refreshRequestsPageIfOpen() {
+  if (getActiveWorkspacePanel() === 'requests') {
+    openRequestsPage(lastRequestsTab, lastRefreshCb);
+  }
+}
 
-  const input = $('#people-search');
-  const results = $('#people-results');
+export function openPeoplePage(onRefreshInbox = lastRefreshCb) {
+  if (onRefreshInbox) lastRefreshCb = onRefreshInbox;
+  const page = $('#people-page');
+  if (!page) return;
+  activateWorkspacePanel('people');
+
+  page.innerHTML = `
+    <div class="settings-page-inner">
+      <div class="settings-page-head">
+        ${panelBackButtonHtml()}
+        <div>
+          <h2>Find people</h2>
+          <p>Search by display name or @username to add friends.</p>
+        </div>
+      </div>
+
+      <div class="settings-card panel-card-padded">
+        <label class="field-label" for="people-search" style="margin-top:4px">Search people</label>
+        <input class="field" id="people-search" placeholder="Name or @username" autocomplete="off" maxlength="48">
+        <div class="people-results panel-results-list" id="people-results" aria-live="polite" style="margin-top:14px">
+          <div class="people-empty">Type at least two characters to search.</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  page.querySelector('[data-panel-back]').onclick = () => closeWorkspacePanel();
+
+  const input = $('#people-search', page);
+  const results = $('#people-results', page);
   let searchTimer = 0;
   let searchRun = 0;
 
@@ -163,7 +305,7 @@ export function openFindPeopleModal(onRefreshInbox) {
           const res = await api.sendFriendRequest(btn.dataset.addPerson);
           await onRefreshInbox?.();
           if (res?.status === 'accepted' || res?.status === 'already_friends') {
-            closeModal();
+            closeWorkspacePanel();
             if (res.conversation_id) await selectChat(res.conversation_id);
             showToast(res.status === 'accepted' ? 'Mutual request accepted — chat opened!' : 'Opened existing chat');
             return;
@@ -198,7 +340,7 @@ export function openFindPeopleModal(onRefreshInbox) {
         try {
           const convId = await api.acceptContactRequest(btn.dataset.acceptPerson);
           await onRefreshInbox?.();
-          closeModal();
+          closeWorkspacePanel();
           if (convId) await selectChat(convId);
           showToast('Friend request accepted');
         } catch (error) {
@@ -211,7 +353,7 @@ export function openFindPeopleModal(onRefreshInbox) {
     results.querySelectorAll('[data-open-conv]').forEach((btn) => {
       btn.onclick = async () => {
         const convId = btn.dataset.openConv;
-        closeModal();
+        closeWorkspacePanel();
         await onRefreshInbox?.();
         await selectChat(convId);
       };
@@ -240,7 +382,7 @@ export function openFindPeopleModal(onRefreshInbox) {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(lookup, 220);
   };
-  setTimeout(() => input?.focus(), 30);
+  if (window.innerWidth > 700) setTimeout(() => input?.focus(), 30);
 }
 
 export function openProfileModal(onProfileUpdated) {
@@ -291,8 +433,7 @@ export function openProfileModal(onProfileUpdated) {
 }
 
 export function isSettingsPageOpen() {
-  const page = $('#settings-page');
-  return Boolean(page && !page.classList.contains('hidden'));
+  return getActiveWorkspacePanel() === 'settings';
 }
 
 function renderNotificationSettingsInner() {
@@ -324,9 +465,14 @@ function renderPlatformExtraSettings() {
     const caps = getNativeCapabilities() || {};
     const bgOn = caps.backgroundSyncEnabled !== false;
     const batteryOptimized = Boolean(caps.batteryOptimized);
+    const bubblesOn = caps.bubblesEnabled !== false;
     return `
       <div class="settings-row">
-        <span>Background message listener<small>Keep native Android service listening while app is closed</small></span>
+        <span>Floating chat bubbles<small id="android-bubbles-status">${bubblesOn ? 'Android floating chat bubbles allowed' : 'Enable bubbles in Android system settings'}</small></span>
+        <button class="secondary-btn" type="button" id="android-bubbles-btn">Manage</button>
+      </div>
+      <div class="settings-row">
+        <span>Background message listener<small>Keep native Android service &amp; worker synced when closed</small></span>
         <input type="checkbox" id="android-bg-toggle" ${bgOn ? 'checked' : ''}>
       </div>
       <div class="settings-row">
@@ -352,27 +498,42 @@ function renderPlatformExtraSettings() {
 }
 
 export function closeSettingsPage(fromPop = false) {
-  const page = $('#settings-page');
-  if (!page || page.classList.contains('hidden')) return;
-  page.classList.add('hidden');
-  $('.workspace')?.classList.remove('settings-open');
-  $('#settings-open')?.classList.remove('selected');
-  $('#chats-tab')?.classList.add('selected');
-  if (!fromPop) popUiLayer();
+  closeWorkspacePanel(fromPop);
 }
 
-export async function openSettingsPage({ onThemeChange, onSignOut }) {
+function compressWallpaperImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read selected image'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Invalid image file'));
+      img.onload = () => {
+        const maxEdge = 1280;
+        const scale = Math.min(1, maxEdge / Math.max(img.width || 1, img.height || 1));
+        const w = Math.max(1, Math.round((img.width || 1) * scale));
+        const h = Math.max(1, Math.round((img.height || 1) * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.78));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+export async function openSettingsPage({ onThemeChange, onChatThemeChange, onSignOut }) {
   const page = $('#settings-page');
   if (!page) return;
-  const alreadyOpen = isSettingsPageOpen();
-  page.classList.remove('hidden');
-  $('.workspace')?.classList.add('settings-open');
-  $('#chats-tab')?.classList.remove('selected');
-  $('#settings-open')?.classList.add('selected');
-  if (!alreadyOpen) pushUiLayer('settings');
+  activateWorkspacePanel('settings');
 
   const palette = state.reactionPalette?.length ? state.reactionPalette : [...DEFAULT_REACTION_PALETTE];
   const doubleTap = state.doubleTapEmoji || DEFAULT_DOUBLE_TAP_EMOJI;
+  const ct = state.chatTheme || {};
 
   page.innerHTML = `
     <div class="settings-page-inner">
@@ -403,6 +564,45 @@ export async function openSettingsPage({ onThemeChange, onSignOut }) {
         <div class="settings-row">
           <span>Sound alerts<small>Play a tone for new messages</small></span>
           <input type="checkbox" id="sound-toggle" ${state.soundEnabled ? 'checked' : ''}>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">Chat Theme</div>
+        <div class="chat-theme-preview" id="chat-theme-preview">
+          <div class="chat-theme-preview-dim" id="chat-theme-preview-dim"></div>
+          <div class="ctp-bubble theirs" id="ctp-theirs">Hey, loving the new look!</div>
+          <div class="ctp-bubble mine" id="ctp-mine">Wait till you try custom wallpapers ✨</div>
+        </div>
+        <div class="theme-presets" id="chat-theme-presets">
+          ${CHAT_THEME_PRESETS.map((p) => {
+            const active = (ct.mineBg || '') === p.mineBg && (ct.theirsBg || '') === p.theirsBg;
+            return `<button type="button" class="theme-preset-pill ${active ? 'active' : ''}" data-theme-preset="${esc(p.id)}">${esc(p.label)}</button>`;
+          }).join('')}
+        </div>
+        <div class="settings-row">
+          <span>Your bubble color<small>Outgoing messages tint</small></span>
+          <input type="color" class="color-swatch-input" id="chat-mine-color" value="${esc(ct.mineBg || '#70a993')}">
+        </div>
+        <div class="settings-row">
+          <span>Their bubble color<small>Incoming messages tint</small></span>
+          <input type="color" class="color-swatch-input" id="chat-theirs-color" value="${esc(ct.theirsBg || '#ffffff')}">
+        </div>
+        <div class="settings-row">
+          <span>Chat wallpaper<small id="chat-bg-status">${ct.bgImage ? 'Custom background photo active' : 'Optional image behind conversations'}</small></span>
+          <div style="display:flex;gap:8px;flex:none">
+            <input type="file" id="chat-bg-file" accept="image/*" hidden>
+            <button type="button" class="secondary-btn" id="chat-bg-upload">Choose photo</button>
+            <button type="button" class="secondary-btn ${ct.bgImage ? '' : 'hidden'}" id="chat-bg-clear">Remove</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span>Wallpaper dim<small>Keep chat text easy to read</small></span>
+          <input type="range" id="chat-bg-dim" min="0" max="75" value="${Math.round((ct.bgDim ?? 0.22) * 100)}" style="width:120px">
+        </div>
+        <div class="settings-row">
+          <span>Reset chat theme<small>Restore default Whisper bubbles and background</small></span>
+          <button type="button" class="secondary-btn" id="reset-chat-theme-btn">Reset</button>
         </div>
       </div>
 
@@ -518,6 +718,11 @@ export async function openSettingsPage({ onThemeChange, onSignOut }) {
       batteryBtn.onclick = () => requestIgnoreBatteryOptimizations();
     }
 
+    const bubblesBtn = $('#android-bubbles-btn', page);
+    if (bubblesBtn) {
+      bubblesBtn.onclick = () => openNativeBubbleSettings();
+    }
+
     const winStartupToggle = $('#win-startup-toggle', page);
     if (winStartupToggle) {
       winStartupToggle.onchange = (e) => {
@@ -551,11 +756,113 @@ export async function openSettingsPage({ onThemeChange, onSignOut }) {
         : 'Unrestricted background delivery enabled';
       batBtn.textContent = caps.batteryOptimized ? 'Allow background' : 'Settings';
     }
+    const bubStatus = $('#android-bubbles-status', page);
+    if (bubStatus) {
+      bubStatus.textContent = caps.bubblesEnabled !== false
+        ? 'Android floating chat bubbles allowed'
+        : 'Enable bubbles in Android system settings';
+    }
     const winStartupToggle = $('#win-startup-toggle', page);
     if (winStartupToggle) winStartupToggle.checked = Boolean(caps.launchOnStartup);
     const winTrayToggle = $('#win-tray-toggle', page);
     if (winTrayToggle) winTrayToggle.checked = caps.minimizeToTray !== false;
     wirePlatformSettings();
+  };
+
+  // Custom Chat Theme wiring
+  const syncThemePreview = () => {
+    const t = state.chatTheme || {};
+    const prev = $('#chat-theme-preview', page);
+    const dimEl = $('#chat-theme-preview-dim', page);
+    const mineEl = $('#ctp-mine', page);
+    const theirsEl = $('#ctp-theirs', page);
+    if (prev) {
+      prev.style.backgroundImage = t.bgImage ? `url("${t.bgImage}")` : '';
+      prev.classList.toggle('has-bg', Boolean(t.bgImage));
+    }
+    if (dimEl) {
+      dimEl.style.opacity = t.bgImage ? String(t.bgDim ?? 0.22) : '0';
+    }
+    if (mineEl) {
+      mineEl.style.background = t.mineBg || '';
+      mineEl.style.color = t.mineText || '';
+    }
+    if (theirsEl) {
+      theirsEl.style.background = t.theirsBg || '';
+      theirsEl.style.color = t.theirsText || '';
+    }
+    const mineInput = $('#chat-mine-color', page);
+    const theirsInput = $('#chat-theirs-color', page);
+    if (mineInput && t.mineBg) mineInput.value = t.mineBg;
+    if (theirsInput && t.theirsBg) theirsInput.value = t.theirsBg;
+    const bgStatus = $('#chat-bg-status', page);
+    const bgClear = $('#chat-bg-clear', page);
+    if (bgStatus) bgStatus.textContent = t.bgImage ? 'Custom background photo active' : 'Optional image behind conversations';
+    if (bgClear) bgClear.classList.toggle('hidden', !t.bgImage);
+    page.querySelectorAll('[data-theme-preset]').forEach((pill) => {
+      const p = CHAT_THEME_PRESETS.find((x) => x.id === pill.dataset.themePreset);
+      pill.classList.toggle('active', Boolean(p && (t.mineBg || '') === p.mineBg && (t.theirsBg || '') === p.theirsBg));
+    });
+    onChatThemeChange?.();
+  };
+
+  syncThemePreview();
+
+  page.querySelectorAll('[data-theme-preset]').forEach((pill) => {
+    pill.onclick = () => {
+      const p = CHAT_THEME_PRESETS.find((x) => x.id === pill.dataset.themePreset);
+      if (!p) return;
+      setChatTheme({ mineBg: p.mineBg, theirsBg: p.theirsBg });
+      syncThemePreview();
+    };
+  });
+
+  $('#chat-mine-color', page).oninput = (e) => {
+    setChatTheme({ mineBg: e.target.value });
+    syncThemePreview();
+  };
+
+  $('#chat-theirs-color', page).oninput = (e) => {
+    setChatTheme({ theirsBg: e.target.value });
+    syncThemePreview();
+  };
+
+  $('#chat-bg-upload', page).onclick = () => $('#chat-bg-file', page)?.click();
+  $('#chat-bg-file', page).onchange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await compressWallpaperImage(file);
+      setChatTheme({ bgImage: dataUrl });
+      syncThemePreview();
+      showToast('Chat wallpaper updated');
+    } catch (error) {
+      showToast(error.message || 'Could not apply wallpaper');
+    }
+    e.target.value = '';
+  };
+
+  $('#chat-bg-clear', page).onclick = () => {
+    setChatTheme({ bgImage: '' });
+    syncThemePreview();
+    showToast('Chat wallpaper removed');
+  };
+
+  $('#chat-bg-dim', page).oninput = (e) => {
+    setChatTheme({ bgDim: Number(e.target.value) / 100 });
+    syncThemePreview();
+  };
+
+  $('#reset-chat-theme-btn', page).onclick = () => {
+    resetChatTheme();
+    const mineInput = $('#chat-mine-color', page);
+    const theirsInput = $('#chat-theirs-color', page);
+    const dimInput = $('#chat-bg-dim', page);
+    if (mineInput) mineInput.value = '#70a993';
+    if (theirsInput) theirsInput.value = '#ffffff';
+    if (dimInput) dimInput.value = '22';
+    syncThemePreview();
+    showToast('Chat theme reset to default');
   };
 
   // Reaction customization
