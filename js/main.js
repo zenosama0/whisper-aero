@@ -1,6 +1,6 @@
 import { configured } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=16';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=17';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
@@ -391,7 +391,7 @@ function handleCallInviteRealtime(payload) {
   const chat = getChat(payload.new?.conversation_id);
   showToast(`${chat?.name || 'Your contact'} is calling`);
   playNotificationChime(state.soundEnabled, 'call');
-  if ('Notification' in window && Notification.permission === 'granted') {
+  if (document.visibilityState === 'hidden' && 'Notification' in window && Notification.permission === 'granted') {
     new Notification('Incoming call notification', {
       body: `${chat?.name || 'A contact'} is trying to reach you.`,
       icon: './icon.svg',

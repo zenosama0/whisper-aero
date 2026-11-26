@@ -1,11 +1,11 @@
-const CACHE = 'whisper-shell-v16';
+const CACHE = 'whisper-shell-v17';
 const FILES = [
   './',
   './index.html',
-  './styles.css?v=16',
-  './auth.css?v=16',
-  './overrides.css?v=16',
-  './app.js?v=16',
+  './styles.css?v=17',
+  './auth.css?v=17',
+  './overrides.css?v=17',
+  './app.js?v=17',
   './app-config.js',
   './manifest.webmanifest',
   './icon.svg',
@@ -13,7 +13,7 @@ const FILES = [
   './icon-192.png',
   './icon-512.png',
   './js/config.js',
-  './js/emoji.js?v=16',
+  './js/emoji.js?v=17',
   './js/utils.js',
   './js/state.js',
   './js/api.js',
@@ -21,7 +21,7 @@ const FILES = [
   './js/viewOnce.js',
   './js/ui/chat.js',
   './js/ui/modals.js',
-  './js/main.js?v=16',
+  './js/main.js?v=17',
 ];
 
 self.addEventListener('install', (event) => {
@@ -71,6 +71,12 @@ self.addEventListener('push', (event) => {
   const nextLine = String(data.body || 'You have a new notification.');
 
   event.waitUntil((async () => {
+    const windowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const hasVisibleClient = windowClients.some(
+      (client) => client.visibilityState === 'visible' || client.focused,
+    );
+    if (hasVisibleClient) return;
+
     const existing = await self.registration.getNotifications({ tag }).catch(() => []);
     let lines = [];
     if (existing.length) {
