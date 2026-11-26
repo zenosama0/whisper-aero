@@ -1,6 +1,6 @@
 import { configured } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=17';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=18';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {

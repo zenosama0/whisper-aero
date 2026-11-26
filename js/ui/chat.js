@@ -639,6 +639,8 @@ export function renderMessages({ preserveScroll = false } = {}) {
   });
 
   box.querySelectorAll('[data-reaction-message]').forEach((btn) => {
+    btn.addEventListener('pointerdown', (e) => e.preventDefault());
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
     btn.onclick = () => {
       const msg = c.messages.find((x) => x.id === btn.dataset.reactionMessage);
       if (!msg) return;
@@ -662,6 +664,7 @@ export function renderMessages({ preserveScroll = false } = {}) {
   };
 
   let lastTouchHeartAt = 0;
+  const BUBBLE_INTERACTIVE = 'button, a, video, input, img.clickable-media, [data-lightbox-id]';
 
   // Wire right-click, long-press, double-tap/double-click, and swipe-right-to-reply
   box.querySelectorAll('.message-row').forEach((row) => {
@@ -678,8 +681,14 @@ export function renderMessages({ preserveScroll = false } = {}) {
       openMessageMenu(msg, c, bubble.getBoundingClientRect());
     });
 
+    bubble.addEventListener('mousedown', (e) => {
+      if (!e.target.closest(BUBBLE_INTERACTIVE)) {
+        e.preventDefault();
+      }
+    });
+
     bubble.addEventListener('dblclick', (e) => {
-      if (e.target.closest('button, a, video, input')) return;
+      if (e.target.closest(BUBBLE_INTERACTIVE)) return;
       if (Date.now() - lastTouchHeartAt < 600) return;
       haptic(12);
       toggleMessageReaction(msg, '❤️');
@@ -754,24 +763,29 @@ export function renderMessages({ preserveScroll = false } = {}) {
         hint.style.transform = '';
       }
 
+      if (longPressFired) {
+        if (e.cancelable) e.preventDefault();
+        return;
+      }
+
       if (swiping && swipeFired) {
         startReplyTo(msg, c);
         return;
       }
 
-      if (!moved && !longPressFired && e.target.closest('.message-bubble') && !e.target.closest('button, a, video')) {
+      if (!moved && e.target.closest('.message-bubble') && !e.target.closest(BUBBLE_INTERACTIVE)) {
+        if (e.cancelable) e.preventDefault();
         const now = Date.now();
         if (lastBubbleTap.id === msg.id && (now - lastBubbleTap.time) < 350) {
           lastBubbleTap = { id: '', time: 0 };
           lastTouchHeartAt = now;
-          if (e.cancelable) e.preventDefault();
           haptic(12);
           toggleMessageReaction(msg, '❤️');
-          if (wasInputFocused) {
-            $('#message-input')?.focus({ preventScroll: true });
-          }
         } else {
           lastBubbleTap = { id: msg.id, time: now };
+        }
+        if (wasInputFocused && document.activeElement !== $('#message-input')) {
+          $('#message-input')?.focus({ preventScroll: true });
         }
       }
     };
