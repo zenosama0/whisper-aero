@@ -2,13 +2,14 @@ import * as api from '../api.js';
 import { getActiveChat, getChat, state } from '../state.js';
 import {
   $,
-  $$,
   avatarMarkup,
   dayKey,
   esc,
   formatDayLabel,
+  formatFileSize,
   formatLastSeen,
   formatTime,
+  haptic,
   openModal,
   showToast,
 } from '../utils.js';
@@ -20,6 +21,8 @@ let callbacks = {
   onChatSelected: null,
   onRefreshInbox: null,
 };
+
+let lastBubbleTap = { id: '', time: 0 };
 
 export function initChatUI(handlers) {
   callbacks = { ...callbacks, ...handlers };
@@ -134,6 +137,7 @@ export async function selectChat(chatId) {
   state.activeChatId = chatId;
   if (changed) {
     clearComposeContext();
+    clearPendingAttachment();
     closeChatSearch();
   }
 
@@ -228,6 +232,167 @@ export function openLightbox(url, mimeType, fileName, attachmentId) {
   }
 }
 
+async function toggleMessageReaction(msg, emoji) {
+  if (!msg || msg.deletedAt || msg.pending) return;
+  const reactions = msg.reactions ? msg.reactions.map((r) => ({ ...r })) : [];
+  const idx = reactions.findIndex((r) => r.emoji === emoji);
+  const mine = idx >= 0 && Boolean(reactions[idx].mine);
+
+  // Optimistic update
+  const snapshot = msg.reactions;
+  if (mine) {
+    if (reactions[idx].count <= 1) reactions.splice(idx, 1);
+    else reactions[idx] = { ...reactions[idx], count: reactions[idx].count - 1, mine: false };
+  } else if (idx >= 0) {
+    reactions[idx] = { ...reactions[idx], count: reactions[idx].count + 1, mine: true };
+  } else {
+    reactions.push({ emoji, count: 1, mine: true });
+  }
+  msg.reactions = reactions;
+  renderMessages({ preserveScroll: true });
+
+  try {
+    await api.toggleReaction(msg.id, emoji, mine);
+  } catch (error) {
+    msg.reactions = snapshot;
+    renderMessages({ preserveScroll: true });
+    showToast(error.message || 'Could not save reaction');
+  }
+}
+
+function startReplyTo(msg, chat) {
+  if (!msg || msg.deletedAt) return;
+  state.editingMessage = null;
+  state.replyingTo = {
+    id: msg.id,
+    senderName: msg.from === 'me' ? 'You' : chat.name,
+    text: msg.text || msg.file?.name || 'Attachment',
+  };
+  renderComposeContext();
+  $('#message-input')?.focus({ preventScroll: true });
+}
+
+function closeMessageMenu() {
+  document.querySelector('.msg-context-backdrop')?.remove();
+}
+
+function openMessageMenu(msg, chat, anchorRect) {
+  if (!msg || msg.deletedAt) return;
+  closeMessageMenu();
+
+  const mine = msg.from === 'me';
+  const backdrop = document.createElement('div');
+  backdrop.className = 'msg-context-backdrop';
+
+  const menu = document.createElement('div');
+  menu.className = 'msg-context-menu';
+  menu.innerHTML = `
+    <div class="msg-react-bar" role="group" aria-label="Add reaction">
+      ${REACTION_PALETTE.map((emoji) => {
+        const active = msg.reactions?.some((r) => r.emoji === emoji && r.mine);
+        return `<button type="button" class="${active ? 'active' : ''}" data-menu-react="${esc(emoji)}">${emoji}</button>`;
+      }).join('')}
+    </div>
+    <div class="msg-action-bar" role="menu">
+      <button type="button" data-menu-action="reply">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
+        <span>Reply</span>
+      </button>
+      <button type="button" data-menu-action="copy">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+        <span>Copy</span>
+      </button>
+      ${mine && !msg.file ? `
+        <button type="button" data-menu-action="edit">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+          <span>Edit</span>
+        </button>
+      ` : ''}
+      ${mine ? `
+        <button type="button" class="danger" data-menu-action="delete">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+          <span>Delete</span>
+        </button>
+      ` : ''}
+    </div>
+  `;
+
+  backdrop.append(menu);
+  document.body.append(backdrop);
+
+  // Measure and clamp strictly within viewport
+  const rect = menu.getBoundingClientRect();
+  const pad = 10;
+  const centerX = anchorRect.left + anchorRect.width / 2;
+  const left = Math.max(pad, Math.min(window.innerWidth - rect.width - pad, centerX - rect.width / 2));
+  let top = anchorRect.top - rect.height - 8;
+  if (top < pad) {
+    top = Math.min(window.innerHeight - rect.height - pad, anchorRect.bottom + 8);
+  }
+  top = Math.max(pad, Math.min(window.innerHeight - rect.height - pad, top));
+
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(top)}px`;
+
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      closeMessageMenu();
+      document.removeEventListener('keydown', onKey);
+    }
+  };
+  document.addEventListener('keydown', onKey);
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) {
+      closeMessageMenu();
+      document.removeEventListener('keydown', onKey);
+    }
+  });
+
+  menu.querySelectorAll('[data-menu-react]').forEach((btn) => {
+    btn.onclick = () => {
+      haptic(10);
+      closeMessageMenu();
+      document.removeEventListener('keydown', onKey);
+      toggleMessageReaction(msg, btn.dataset.menuReact);
+    };
+  });
+
+  menu.querySelectorAll('[data-menu-action]').forEach((btn) => {
+    btn.onclick = async () => {
+      const action = btn.dataset.menuAction;
+      haptic(10);
+      closeMessageMenu();
+      document.removeEventListener('keydown', onKey);
+      if (action === 'reply') {
+        startReplyTo(msg, chat);
+      } else if (action === 'copy') {
+        try {
+          await navigator.clipboard.writeText(msg.text || msg.file?.name || '');
+          showToast('Copied to clipboard');
+        } catch {
+          showToast('Copy is unavailable here');
+        }
+      } else if (action === 'edit') {
+        state.replyingTo = null;
+        state.editingMessage = { id: msg.id, conversationId: chat.id, text: msg.text };
+        renderComposeContext();
+        const input = $('#message-input');
+        if (input) {
+          input.value = msg.text;
+          input.focus({ preventScroll: true });
+        }
+      } else if (action === 'delete') {
+        try {
+          await api.deleteMessage(msg.id);
+        } catch (error) {
+          showToast(error.message || 'Could not delete message');
+        }
+      }
+    };
+  });
+}
+
 export function renderMessages({ preserveScroll = false } = {}) {
   const c = getActiveChat();
   const box = $('#messages');
@@ -307,29 +472,17 @@ export function renderMessages({ preserveScroll = false } = {}) {
     }
 
     const reactionsHtml = (m.reactions || [])
-      .map((r) => `<button class="reaction-chip ${r.mine ? 'mine-reaction' : ''}" type="button" data-emoji="${esc(r.emoji)}" data-mine="${r.mine}" data-reaction-message="${esc(m.id)}">${esc(r.emoji)} ${r.count}</button>`)
+      .map((r) => `<button class="reaction-chip ${r.mine ? 'mine-reaction' : ''}" type="button" data-emoji="${esc(r.emoji)}" data-reaction-message="${esc(m.id)}">${esc(r.emoji)} ${r.count}</button>`)
       .join('');
 
     const isSeen = mine && c.peerLastReadAt && m.createdAt && new Date(c.peerLastReadAt) >= new Date(m.createdAt);
     const ticks = mine ? (m.pending ? '⏳' : isSeen ? '✓✓' : '✓') : '';
 
-    const toolsHtml = m.deletedAt
-      ? ''
-      : `
-        <div class="message-tools">
-          <button type="button" data-react-open="${esc(m.id)}" title="React" aria-label="React"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/></svg></button>
-          <button type="button" data-reply="${esc(m.id)}" title="Reply" aria-label="Reply"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg></button>
-          <button type="button" data-copy="${esc(m.id)}" title="Copy" aria-label="Copy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button>
-          ${mine && !m.file ? `<button type="button" data-edit="${esc(m.id)}" title="Edit" aria-label="Edit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>` : ''}
-          ${mine ? `<button type="button" data-delete="${esc(m.id)}" title="Delete" aria-label="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>` : ''}
-        </div>
-      `;
-
     chunks.push(`
       <div class="message-row ${mine ? 'mine' : 'theirs'} ${isMatch ? 'search-row-match' : ''}" data-msg-id="${esc(m.id)}">
+        <span class="swipe-reply-hint" aria-hidden="true">↩</span>
         ${mine ? '' : avatarMarkup(c, 'mini-avatar')}
         <div class="message-wrap">
-          ${toolsHtml}
           ${bodyHtml}
           ${reactionsHtml ? `<div class="message-reactions">${reactionsHtml}</div>` : ''}
           <div class="message-meta">${esc(m.time || formatTime(m.createdAt))}${m.editedAt ? ' · edited' : ''} ${ticks}</div>
@@ -340,7 +493,6 @@ export function renderMessages({ preserveScroll = false } = {}) {
 
   box.innerHTML = chunks.join('');
 
-  // Load uncached persistent images/videos asynchronously
   box.querySelectorAll('[data-media-id]').forEach(async (slot) => {
     const id = slot.dataset.mediaId;
     const type = slot.dataset.mediaType;
@@ -391,72 +543,12 @@ export function renderMessages({ preserveScroll = false } = {}) {
     };
   });
 
-  box.querySelectorAll('[data-react-open]').forEach((btn) => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      openInlineReactionPicker(btn, btn.dataset.reactOpen);
-    };
-  });
-
   box.querySelectorAll('[data-reaction-message]').forEach((btn) => {
-    btn.onclick = async () => {
-      try {
-        await api.toggleReaction(btn.dataset.reactionMessage, btn.dataset.emoji, btn.dataset.mine === 'true');
-      } catch (error) {
-        showToast(error.message || 'Reaction failed');
-      }
-    };
-  });
-
-  box.querySelectorAll('[data-reply]').forEach((btn) => {
     btn.onclick = () => {
-      const msg = c.messages.find((x) => x.id === btn.dataset.reply);
+      const msg = c.messages.find((x) => x.id === btn.dataset.reactionMessage);
       if (!msg) return;
-      state.editingMessage = null;
-      state.replyingTo = {
-        id: msg.id,
-        senderName: msg.from === 'me' ? 'You' : c.name,
-        text: msg.text || msg.file?.name || 'Attachment',
-      };
-      renderComposeContext();
-      $('#message-input')?.focus();
-    };
-  });
-
-  box.querySelectorAll('[data-edit]').forEach((btn) => {
-    btn.onclick = () => {
-      const msg = c.messages.find((x) => x.id === btn.dataset.edit);
-      if (!msg || msg.deletedAt || msg.file) return;
-      state.replyingTo = null;
-      state.editingMessage = { id: msg.id, conversationId: c.id, text: msg.text };
-      renderComposeContext();
-      const input = $('#message-input');
-      if (input) {
-        input.value = msg.text;
-        input.focus();
-      }
-    };
-  });
-
-  box.querySelectorAll('[data-delete]').forEach((btn) => {
-    btn.onclick = async () => {
-      try {
-        await api.deleteMessage(btn.dataset.delete);
-      } catch (error) {
-        showToast(error.message || 'Could not delete message');
-      }
-    };
-  });
-
-  box.querySelectorAll('[data-copy]').forEach((btn) => {
-    btn.onclick = async () => {
-      const msg = c.messages.find((x) => x.id === btn.dataset.copy);
-      try {
-        await navigator.clipboard.writeText(msg?.text || msg?.file?.name || '');
-        showToast('Copied to clipboard');
-      } catch {
-        showToast('Copy is unavailable here');
-      }
+      haptic(10);
+      toggleMessageReaction(msg, btn.dataset.emoji);
     };
   });
 
@@ -465,6 +557,119 @@ export function renderMessages({ preserveScroll = false } = {}) {
       const target = box.querySelector(`[data-msg-id="${CSS.escape(btn.dataset.jumpMsg)}"]`);
       target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
+  });
+
+  // Wire right-click, long-press, double-tap/double-click, and swipe-right-to-reply
+  box.querySelectorAll('.message-row').forEach((row) => {
+    const msg = c.messages.find((x) => x.id === row.dataset.msgId);
+    const wrap = row.querySelector('.message-wrap');
+    const bubble = row.querySelector('.message-bubble');
+    const hint = row.querySelector('.swipe-reply-hint');
+    if (!msg || msg.deletedAt || !wrap || !bubble) return;
+
+    bubble.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      haptic(12);
+      openMessageMenu(msg, c, bubble.getBoundingClientRect());
+    });
+
+    bubble.addEventListener('dblclick', (e) => {
+      if (e.target.closest('button, a, video, input')) return;
+      haptic(12);
+      toggleMessageReaction(msg, '❤️');
+    });
+
+    let pressTimer = 0;
+    let startX = 0;
+    let startY = 0;
+    let swiping = false;
+    let swipeFired = false;
+    let longPressFired = false;
+    let moved = false;
+
+    row.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      swiping = false;
+      swipeFired = false;
+      longPressFired = false;
+      moved = false;
+      wrap.style.transition = 'none';
+
+      if (e.target.closest('.message-bubble')) {
+        pressTimer = setTimeout(() => {
+          if (moved || swiping) return;
+          longPressFired = true;
+          haptic(20);
+          openMessageMenu(msg, c, bubble.getBoundingClientRect());
+        }, 420);
+      }
+    }, { passive: true });
+
+    row.addEventListener('touchmove', (e) => {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+        moved = true;
+        clearTimeout(pressTimer);
+      }
+
+      if (!swiping && dx > 12 && dx > Math.abs(dy) * 1.35) {
+        swiping = true;
+      }
+
+      if (swiping) {
+        const pull = Math.max(0, Math.min(64, dx));
+        wrap.style.transform = `translateX(${pull}px)`;
+        if (hint) {
+          hint.style.opacity = String(Math.min(1, pull / 48));
+          hint.style.transform = `scale(${0.7 + Math.min(0.4, (pull / 48) * 0.4)})`;
+        }
+        if (pull >= 48 && !swipeFired) {
+          swipeFired = true;
+          haptic(15);
+        }
+      }
+    }, { passive: true });
+
+    const finishTouch = (e) => {
+      clearTimeout(pressTimer);
+      wrap.style.transition = 'transform 0.18s ease-out';
+      wrap.style.transform = '';
+      if (hint) {
+        hint.style.opacity = '0';
+        hint.style.transform = '';
+      }
+
+      if (swiping && swipeFired) {
+        startReplyTo(msg, c);
+        return;
+      }
+
+      if (!moved && !longPressFired && e.target.closest('.message-bubble') && !e.target.closest('button, a, video')) {
+        const now = Date.now();
+        if (lastBubbleTap.id === msg.id && (now - lastBubbleTap.time) < 280) {
+          lastBubbleTap = { id: '', time: 0 };
+          haptic(12);
+          toggleMessageReaction(msg, '❤️');
+        } else {
+          lastBubbleTap = { id: msg.id, time: now };
+        }
+      }
+    };
+
+    row.addEventListener('touchend', finishTouch, { passive: true });
+    row.addEventListener('touchcancel', () => {
+      clearTimeout(pressTimer);
+      wrap.style.transition = 'transform 0.18s ease-out';
+      wrap.style.transform = '';
+      if (hint) hint.style.opacity = '0';
+    }, { passive: true });
   });
 
   const olderBtn = $('#load-older-btn', box);
@@ -494,37 +699,6 @@ export function renderMessages({ preserveScroll = false } = {}) {
   } else {
     box.scrollTop = box.scrollHeight;
   }
-}
-
-function openInlineReactionPicker(anchorBtn, messageId) {
-  $$('.reaction-picker-pop').forEach((el) => el.remove());
-  const picker = document.createElement('div');
-  picker.className = 'reaction-picker-pop';
-  picker.innerHTML = REACTION_PALETTE.map((emoji) => `<button type="button">${emoji}</button>`).join('');
-  anchorBtn.closest('.message-wrap')?.append(picker);
-
-  const c = getActiveChat();
-  const msg = c?.messages.find((m) => m.id === messageId);
-
-  picker.querySelectorAll('button').forEach((btn) => {
-    btn.onclick = async (e) => {
-      e.stopPropagation();
-      const emoji = btn.textContent;
-      const existing = msg?.reactions?.find((r) => r.emoji === emoji);
-      picker.remove();
-      try {
-        await api.toggleReaction(messageId, emoji, Boolean(existing?.mine));
-      } catch (err) {
-        showToast(err.message || 'Could not save reaction');
-      }
-    };
-  });
-
-  const dismiss = () => {
-    picker.remove();
-    document.removeEventListener('click', dismiss);
-  };
-  setTimeout(() => document.addEventListener('click', dismiss), 0);
 }
 
 export function renderComposeContext() {
@@ -560,6 +734,55 @@ export function clearComposeContext() {
   renderComposeContext();
 }
 
+export function renderAttachmentPreview() {
+  const bar = $('#attachment-preview');
+  if (!bar) return;
+  const att = state.pendingAttachment;
+  if (!att?.file) {
+    bar.classList.add('hidden');
+    bar.innerHTML = '';
+    return;
+  }
+
+  const { file, previewUrl, isViewOnce } = att;
+  let thumbHtml = '<span class="att-prev-icon" aria-hidden="true">▤</span>';
+  if (file.type?.startsWith('image/') && previewUrl) {
+    thumbHtml = `<img class="att-prev-thumb" src="${esc(previewUrl)}" alt="${esc(file.name)}">`;
+  } else if (file.type?.startsWith('video/') && previewUrl) {
+    thumbHtml = `<video class="att-prev-thumb" src="${esc(previewUrl)}" muted playsinline></video>`;
+  }
+
+  bar.classList.remove('hidden');
+  bar.innerHTML = `
+    ${thumbHtml}
+    <div class="att-prev-meta">
+      <strong>${esc(file.name)}</strong>
+      <small>${esc(formatFileSize(file.size))}</small>
+    </div>
+    <button type="button" class="att-vo-pill ${isViewOnce ? 'active' : ''}" id="att-vo-toggle" title="Make this attachment View Once (1×)">1× View once</button>
+    <button type="button" class="compose-ctx-close" id="att-prev-remove" aria-label="Remove attachment">×</button>
+  `;
+
+  $('#att-vo-toggle', bar).onclick = () => {
+    haptic(10);
+    state.pendingAttachment.isViewOnce = !state.pendingAttachment.isViewOnce;
+    renderAttachmentPreview();
+  };
+  $('#att-prev-remove', bar).onclick = () => {
+    clearPendingAttachment();
+  };
+}
+
+export function clearPendingAttachment() {
+  if (state.pendingAttachment?.previewUrl) {
+    URL.revokeObjectURL(state.pendingAttachment.previewUrl);
+  }
+  state.pendingAttachment = null;
+  const input = $('#file-input');
+  if (input) input.value = '';
+  renderAttachmentPreview();
+}
+
 export function updateTypingBanner() {
   const el = $('#typing');
   const c = getActiveChat();
@@ -576,8 +799,7 @@ export function openChatSearch() {
   if (!bar) return;
   state.chatSearch.open = true;
   bar.classList.remove('hidden');
-  const input = $('#chat-search-input');
-  input?.focus();
+  $('#chat-search-input')?.focus();
 }
 
 export function closeChatSearch() {

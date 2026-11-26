@@ -125,6 +125,16 @@ export function playNotificationChime(enabled = true, type = 'message') {
   }
 }
 
+export function haptic(pattern = 15) {
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      navigator.vibrate(pattern);
+    }
+  } catch {
+    // Vibration API unavailable or blocked.
+  }
+}
+
 export function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

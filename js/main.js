@@ -4,9 +4,11 @@ import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime }
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
   clearComposeContext,
+  clearPendingAttachment,
   closeChatSearch,
   initChatUI,
   openChatSearch,
+  renderAttachmentPreview,
   renderChats,
   renderMessages,
   renderSharedMedia,
@@ -381,6 +383,9 @@ async function enterCloud(user) {
     setTheme(state.user.theme);
 
     await refreshInbox({ preserveActive: false });
+    if ('Notification' in window && Notification.permission === 'granted') {
+      api.registerWebPush().catch(() => {});
+    }
     startRealtime(user.id, {
       onMessageEvent: handleMessageRealtime,
       onReactionEvent: handleReactionRealtime,
@@ -418,13 +423,15 @@ async function handleSendText() {
   const c = getActiveChat();
   const input = $('#message-input');
   const txt = input?.value.trim() || '';
-  if (!c || !txt) return;
+  const pending = state.pendingAttachment;
+  if (!c || (!txt && !pending)) return;
 
-  if (state.editingMessage) {
+  if (state.editingMessage && !pending) {
     const targetId = state.editingMessage.id;
     clearComposeContext();
     input.value = '';
     input.style.height = 'auto';
+    input.focus({ preventScroll: true });
     try {
       await api.editMessage(targetId, txt);
     } catch (error) {
@@ -437,7 +444,33 @@ async function handleSendText() {
   clearComposeContext();
   input.value = '';
   input.style.height = 'auto';
+  input.focus({ preventScroll: true });
   sendTypingSignal(c.id, state.user.id, false);
+
+  if (pending?.file) {
+    const fileToSend = pending.file;
+    const isViewOnce = Boolean(pending.isViewOnce);
+    clearPendingAttachment();
+    showToast(isViewOnce ? 'Sending view-once media…' : 'Uploading attachment…');
+    try {
+      await api.sendAttachment({
+        conversationId: c.id,
+        file: fileToSend,
+        caption: txt,
+        replyToId: replyTo?.id || null,
+        viewOnce: isViewOnce,
+      });
+      api.triggerPushNotification({
+        conversationId: c.id,
+        title: state.user.name || state.user.username,
+        body: isViewOnce ? 'Sent a view-once attachment' : `Sent ${fileToSend.name}`,
+        tag: `whisper-msg-${c.id}`,
+      });
+    } catch (error) {
+      showToast(error.message || 'Could not upload attachment');
+    }
+    return;
+  }
 
   const tempId = `temp-${crypto.randomUUID()}`;
   const nowIso = new Date().toISOString();
@@ -478,6 +511,12 @@ async function handleSendText() {
       renderChats();
       renderMessages({ preserveScroll: true });
     }
+    api.triggerPushNotification({
+      conversationId: c.id,
+      title: state.user.name || state.user.username,
+      body: txt,
+      tag: `whisper-msg-${c.id}`,
+    });
   } catch (error) {
     c.messages = c.messages.filter((m) => m.id !== tempId);
     renderMessages({ preserveScroll: true });
@@ -634,6 +673,10 @@ function wireEvents() {
     }
   };
 
+  const sendBtn = $('.send-btn');
+  sendBtn?.addEventListener('pointerdown', (e) => e.preventDefault());
+  sendBtn?.addEventListener('mousedown', (e) => e.preventDefault());
+
   $('#composer').addEventListener('submit', (e) => {
     e.preventDefault();
     handleSendText();
@@ -655,14 +698,8 @@ function wireEvents() {
     if (c && e.target.value.trim()) sendTypingSignal(c.id, state.user.id, true);
   });
 
-  $('#view-once-btn')?.addEventListener('click', () => {
-    state.viewOnce = !state.viewOnce;
-    $('#view-once-btn').classList.toggle('active', state.viewOnce);
-    showToast(state.viewOnce ? 'Next attachment will be View Once (1×)' : 'Normal persistent attachments enabled');
-  });
-
   $('#attach-btn').onclick = () => $('#file-input').click();
-  $('#file-input').onchange = async (event) => {
+  $('#file-input').onchange = (event) => {
     const file = event.target.files[0];
     const c = getActiveChat();
     if (!file || !c) return;
@@ -671,28 +708,16 @@ function wireEvents() {
       event.target.value = '';
       return;
     }
-    const isViewOnce = state.viewOnce;
-    const replyTo = state.replyingTo;
-    state.viewOnce = false;
-    $('#view-once-btn')?.classList.remove('active');
-    clearComposeContext();
-
-    showToast(isViewOnce ? 'Uploading view-once media…' : 'Uploading attachment…');
-    try {
-      await api.sendAttachment({
-        conversationId: c.id,
-        file,
-        caption: $('#message-input').value.trim(),
-        replyToId: replyTo?.id || null,
-        viewOnce: isViewOnce,
-      });
-      $('#message-input').value = '';
-      $('#message-input').style.height = 'auto';
-    } catch (error) {
-      showToast(error.message || 'Could not upload attachment');
-    } finally {
-      event.target.value = '';
+    if (state.pendingAttachment?.previewUrl) {
+      URL.revokeObjectURL(state.pendingAttachment.previewUrl);
     }
+    const previewUrl = (file.type?.startsWith('image/') || file.type?.startsWith('video/'))
+      ? URL.createObjectURL(file)
+      : '';
+    state.pendingAttachment = { file, previewUrl, isViewOnce: false };
+    renderAttachmentPreview();
+    $('#message-input')?.focus({ preventScroll: true });
+    event.target.value = '';
   };
 
   $('#emoji-btn').onclick = () => $('#emoji-pop').classList.toggle('hidden');
@@ -768,6 +793,12 @@ function wireEvents() {
     if (!c) return;
     try {
       await api.createCallInvite(c.id);
+      api.triggerPushNotification({
+        conversationId: c.id,
+        title: 'Incoming call',
+        body: `${state.user.name || state.user.username} is calling on Whisper`,
+        tag: `whisper-call-${c.id}`,
+      });
       showToast(`Call notification sent to ${c.name}`);
     } catch (error) {
       showToast(error.message || 'Call notification could not be sent');

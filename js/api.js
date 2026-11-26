@@ -726,3 +726,67 @@ export async function createCallInvite(conversationId) {
   const { error } = await supabase.from('call_invites').insert({ conversation_id: conversationId, caller_id: user.id });
   if (error) throw error;
 }
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const output = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) output[i] = raw.charCodeAt(i);
+  return output;
+}
+
+export async function getVapidPublicKey() {
+  const res = await fetch(`${config.supabaseUrl}/functions/v1/push?action=vapid-public-key`, {
+    headers: { apikey: config.supabaseAnonKey },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.publicKey) throw new Error(data.error || 'Could not load push key.');
+  return data.publicKey;
+}
+
+export async function registerWebPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
+  if (Notification.permission !== 'granted') return false;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) return false;
+
+  const reg = await navigator.serviceWorker.ready;
+  let subscription = await reg.pushManager.getSubscription();
+  if (!subscription) {
+    const publicKey = await getVapidPublicKey();
+    subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+  }
+
+  const res = await fetch(`${config.supabaseUrl}/functions/v1/push`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({ action: 'subscribe', subscription: subscription.toJSON() }),
+  });
+  return res.ok;
+}
+
+export async function triggerPushNotification({ conversationId = '', targetUserId = '', title = 'Whisper', body = '', tag = 'whisper' }) {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+    await fetch(`${config.supabaseUrl}/functions/v1/push`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ action: 'notify', conversationId, targetUserId, title, body, tag }),
+    });
+  } catch {
+    // Background push is best-effort and must not block foreground messaging.
+  }
+}

@@ -327,7 +327,12 @@ export async function openSettingsModal({ onThemeChange, onSignOut }) {
       return;
     }
     const perm = await Notification.requestPermission();
-    showToast(perm === 'granted' ? 'Notifications enabled' : 'Permission was not granted');
+    if (perm === 'granted') {
+      const pushed = await api.registerWebPush().catch(() => false);
+      showToast(pushed ? 'Background push notifications enabled' : 'Browser notifications enabled');
+    } else {
+      showToast('Permission was not granted');
+    }
   };
 
   $('#sign-out').onclick = async () => {
