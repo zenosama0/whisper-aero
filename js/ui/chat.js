@@ -17,7 +17,7 @@ import {
 } from '../utils.js';
 import { openViewOnceMedia } from '../viewOnce.js';
 
-const REACTION_PALETTE = ['❤️', '😂', '👍', '🔥', '🎉', '🥹', '😮', '🙏'];
+const REACTION_PALETTE = ['✨', '😆', '💖', '😢', '😭', '💀', '💜'];
 
 let callbacks = {
   onChatSelected: null,
