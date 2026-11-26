@@ -1,1 +1,45 @@
-{"name":"Whisper Messenger","short_name":"Whisper","description":"Private, thoughtful conversations.","start_url":"./","scope":"./","display":"standalone","background_color":"#e9f2f5","theme_color":"#d8edf3","icons":[{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
+{
+  "id": "/whisper-aero/",
+  "name": "Whisper",
+  "short_name": "Whisper",
+  "description": "Messages that feel close. Private, real-time conversations with an Aero glass workspace.",
+  "start_url": "/whisper-aero/",
+  "scope": "/whisper-aero/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#e9f2f5",
+  "theme_color": "#66a7aa",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
