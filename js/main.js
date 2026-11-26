@@ -1,6 +1,6 @@
 import { configured } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=15';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=16';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
@@ -17,6 +17,7 @@ import {
   runChatSearch,
   selectChat,
   stepChatSearch,
+  syncChatMessages,
   updatePeerHeader,
   updateTypingBanner,
 } from './ui/chat.js';
@@ -49,6 +50,8 @@ let closingModalFromPop = false;
 let isRecoveryFlow = window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery');
 let activeUserId = null;
 let refreshPromise = null;
+let resumePromise = null;
+let lastResumeSyncAt = 0;
 const typingTimers = new Map();
 
 const authGate = $('#auth-gate');
@@ -161,6 +164,58 @@ function updateUserBadge() {
     avatar.style.backgroundImage = '';
     avatar.textContent = initials(state.user.name || state.user.username);
   }
+}
+
+function getRealtimeHandlers() {
+  return {
+    onMessageEvent: handleMessageRealtime,
+    onReactionEvent: handleReactionRealtime,
+    onAttachmentEvent: handleAttachmentRealtime,
+    onMemberEvent: handleMemberRealtime,
+    onRequestEvent: handleRequestRealtime,
+    onCallInvite: handleCallInviteRealtime,
+    onPresenceSync: (onlineIds) => {
+      state.onlineUsers = onlineIds;
+      renderChats();
+      updatePeerHeader();
+    },
+  };
+}
+
+async function resumeSync({ forceChatId = '' } = {}) {
+  if (!state.user.id) {
+    if (forceChatId) pendingChatId = forceChatId;
+    return;
+  }
+  const now = Date.now();
+  if (!forceChatId && !resumePromise && now - lastResumeSyncAt < 1500) return;
+  if (resumePromise) {
+    await resumePromise;
+    if (forceChatId) {
+      if (getChat(forceChatId)) await selectChat(forceChatId, { forceSync: true });
+      else pendingChatId = forceChatId;
+    }
+    return;
+  }
+  lastResumeSyncAt = now;
+  resumePromise = (async () => {
+    try {
+      startRealtime(state.user.id, getRealtimeHandlers());
+      if (state.activeChatId) {
+        joinConversationTyping(state.activeChatId, state.user.id, handleRemoteTyping);
+      }
+      await refreshInbox({ preserveActive: true });
+      if (forceChatId) {
+        if (getChat(forceChatId)) await selectChat(forceChatId, { forceSync: true });
+        else pendingChatId = forceChatId;
+      } else if (state.activeChatId) {
+        await syncChatMessages(state.activeChatId);
+      }
+    } finally {
+      resumePromise = null;
+    }
+  })();
+  return resumePromise;
 }
 
 async function refreshInbox({ preserveActive = true } = {}) {
@@ -402,19 +457,7 @@ async function enterCloud(user) {
     if ('Notification' in window && Notification.permission === 'granted') {
       api.registerWebPush().catch(() => {});
     }
-    startRealtime(user.id, {
-      onMessageEvent: handleMessageRealtime,
-      onReactionEvent: handleReactionRealtime,
-      onAttachmentEvent: handleAttachmentRealtime,
-      onMemberEvent: handleMemberRealtime,
-      onRequestEvent: handleRequestRealtime,
-      onCallInvite: handleCallInviteRealtime,
-      onPresenceSync: (onlineIds) => {
-        state.onlineUsers = onlineIds;
-        renderChats();
-        updatePeerHeader();
-      },
-    });
+    startRealtime(user.id, getRealtimeHandlers());
   } catch (error) {
     activeUserId = null;
     showAuth('login');
@@ -1070,20 +1113,24 @@ function wireEvents() {
     navigator.serviceWorker.addEventListener('message', (event) => {
       const chatId = event.data?.type === 'OPEN_CHAT' ? event.data.conversationId : '';
       if (!chatId) return;
-      if (getChat(chatId)) selectChat(chatId);
-      else pendingChatId = chatId;
+      resumeSync({ forceChatId: chatId });
     });
   }
 
   document.addEventListener('visibilitychange', () => {
-    const c = getActiveChat();
-    if (document.visibilityState === 'visible' && c && c.unread > 0) {
-      c.unread = 0;
-      api.markConversationRead(c.id, state.user.id).then((ts) => {
-        if (ts) c.lastReadAt = ts;
-      });
-      renderChats();
+    if (document.visibilityState === 'visible') {
+      resumeSync();
     }
+  });
+
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted || document.visibilityState === 'visible') {
+      resumeSync();
+    }
+  });
+
+  window.addEventListener('online', () => {
+    resumeSync();
   });
 }
 

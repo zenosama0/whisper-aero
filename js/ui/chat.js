@@ -131,7 +131,52 @@ export function updatePeerHeader() {
   $('#favorite-btn').innerHTML = c.favorite ? '★ &nbsp; In favorites' : '☆ &nbsp; Add to favorites';
 }
 
-export async function selectChat(chatId) {
+export async function syncChatMessages(chatId, { reloadSharedMedia = false } = {}) {
+  const c = getChat(chatId);
+  if (!c || !state.user) return false;
+  try {
+    const { messages, hasMore } = await api.loadMessages(c.id, state.user.id, { limit: 50 });
+    if (!c.loaded) {
+      c.messages = messages;
+      c.hasMore = hasMore;
+      c.loaded = true;
+    } else {
+      const merged = new Map();
+      for (const m of c.messages) {
+        if (m && m.id) merged.set(m.id, m);
+      }
+      for (const m of messages) {
+        merged.set(m.id, m);
+      }
+      c.messages = [...merged.values()].sort(
+        (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+      );
+      if (!c.hasMore) c.hasMore = hasMore;
+    }
+    c.latestMessage = c.messages.at(-1) || c.latestMessage;
+    if (reloadSharedMedia) {
+      c.sharedMedia = await api.loadSharedMedia(c.id).catch(() => c.sharedMedia || []);
+    }
+    if (state.activeChatId === c.id) {
+      const latestAt = c.messages.at(-1)?.createdAt || '';
+      const hasUnreadLatest = Boolean(latestAt && (!c.lastReadAt || latestAt > c.lastReadAt));
+      if (document.visibilityState === 'visible' && (c.unread > 0 || hasUnreadLatest)) {
+        c.unread = 0;
+        api.markConversationRead(c.id, state.user.id).then((ts) => {
+          if (ts) c.lastReadAt = ts;
+        });
+      }
+      renderMessages();
+      renderChats();
+      if (reloadSharedMedia) renderSharedMedia();
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function selectChat(chatId, { forceSync = false } = {}) {
   const c = getChat(chatId);
   if (!c) return;
 
@@ -163,6 +208,12 @@ export async function selectChat(chatId) {
   updateTypingBanner();
   renderChats();
 
+  const needsSync =
+    c.loaded &&
+    (forceSync ||
+      c.unread > 0 ||
+      (c.latestMessage && c.latestMessage.id !== c.messages.at(-1)?.id));
+
   if (!c.loaded) {
     $('#messages').innerHTML = '<div class="people-empty">Loading conversation…</div>';
     try {
@@ -178,6 +229,8 @@ export async function selectChat(chatId) {
     } catch (error) {
       showToast(error.message || 'Could not load messages');
     }
+  } else if (needsSync) {
+    await syncChatMessages(c.id, { reloadSharedMedia: true });
   }
 
   if (c.unread > 0) {

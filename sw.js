@@ -1,11 +1,11 @@
-const CACHE = 'whisper-shell-v15';
+const CACHE = 'whisper-shell-v16';
 const FILES = [
   './',
   './index.html',
-  './styles.css?v=15',
-  './auth.css?v=15',
-  './overrides.css?v=15',
-  './app.js?v=15',
+  './styles.css?v=16',
+  './auth.css?v=16',
+  './overrides.css?v=16',
+  './app.js?v=16',
   './app-config.js',
   './manifest.webmanifest',
   './icon.svg',
@@ -13,7 +13,7 @@ const FILES = [
   './icon-192.png',
   './icon-512.png',
   './js/config.js',
-  './js/emoji.js?v=15',
+  './js/emoji.js?v=16',
   './js/utils.js',
   './js/state.js',
   './js/api.js',
@@ -21,7 +21,7 @@ const FILES = [
   './js/viewOnce.js',
   './js/ui/chat.js',
   './js/ui/modals.js',
-  './js/main.js?v=15',
+  './js/main.js?v=16',
 ];
 
 self.addEventListener('install', (event) => {
