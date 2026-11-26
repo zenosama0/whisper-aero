@@ -1,5 +1,11 @@
 import * as api from '../api.js';
-import { getActiveChat, getChat, state } from '../state.js';
+import {
+  DEFAULT_DOUBLE_TAP_EMOJI,
+  DEFAULT_REACTION_PALETTE,
+  getActiveChat,
+  getChat,
+  state,
+} from '../state.js';
 import {
   $,
   avatarMarkup,
@@ -16,8 +22,6 @@ import {
   showToast,
 } from '../utils.js';
 import { openViewOnceMedia } from '../viewOnce.js';
-
-const REACTION_PALETTE = ['✨', '😆', '💖', '😢', '😭', '💀', '💜'];
 
 let callbacks = {
   onChatSelected: null,
@@ -350,10 +354,20 @@ function openMessageMenu(msg, chat, anchorRect) {
   closeMessageMenu();
   pushUiLayer('menu');
 
+  const wasInputFocused = document.activeElement === $('#message-input');
+  const restoreKeyboardIfNeeded = () => {
+    if (wasInputFocused && document.activeElement !== $('#message-input')) {
+      $('#message-input')?.focus({ preventScroll: true });
+    }
+  };
+
+  const palette = state.reactionPalette?.length ? state.reactionPalette : DEFAULT_REACTION_PALETTE;
   const mine = msg.from === 'me';
   const backdrop = document.createElement('div');
   backdrop.className = 'msg-context-backdrop';
   backdrop.addEventListener('contextmenu', (e) => e.preventDefault());
+  backdrop.addEventListener('pointerdown', (e) => e.preventDefault());
+  backdrop.addEventListener('mousedown', (e) => e.preventDefault());
 
   // Keep the top chat header unblurred above the backdrop
   const headerRect = $('.chat-header')?.getBoundingClientRect();
@@ -366,9 +380,11 @@ function openMessageMenu(msg, chat, anchorRect) {
 
   const menu = document.createElement('div');
   menu.className = 'msg-context-menu';
+  menu.addEventListener('pointerdown', (e) => e.preventDefault());
+  menu.addEventListener('mousedown', (e) => e.preventDefault());
   menu.innerHTML = `
     <div class="msg-react-bar" role="group" aria-label="Add reaction">
-      ${REACTION_PALETTE.map((emoji) => {
+      ${palette.map((emoji) => {
         const active = msg.reactions?.some((r) => r.emoji === emoji && r.mine);
         return `<button type="button" class="${active ? 'active' : ''}" data-menu-react="${esc(emoji)}">${emoji}</button>`;
       }).join('')}
@@ -401,15 +417,17 @@ function openMessageMenu(msg, chat, anchorRect) {
   backdrop.append(menu);
   document.body.append(backdrop);
 
-  // Measure and clamp strictly within viewport below the header
+  // Measure and clamp strictly within visual viewport below the header (above open keyboard)
   const rect = menu.getBoundingClientRect();
+  const vv = window.visualViewport;
+  const viewBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
   const pad = 10;
   const topBound = minTop + 8;
   const centerX = anchorRect.left + anchorRect.width / 2;
   const left = Math.max(pad, Math.min(window.innerWidth - rect.width - pad, centerX - rect.width / 2));
   let top = anchorRect.top - 52;
-  if (top + rect.height > window.innerHeight - pad) {
-    top = window.innerHeight - rect.height - pad;
+  if (top + rect.height > viewBottom - pad) {
+    top = viewBottom - rect.height - pad;
   }
   top = Math.max(topBound, top);
 
@@ -420,24 +438,39 @@ function openMessageMenu(msg, chat, anchorRect) {
     if (e.key === 'Escape') {
       closeMessageMenu();
       document.removeEventListener('keydown', onKey);
+      restoreKeyboardIfNeeded();
     }
   };
   document.addEventListener('keydown', onKey);
 
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) {
-      closeMessageMenu();
-      document.removeEventListener('keydown', onKey);
-    }
-  });
+  let dismissed = false;
+  const dismissMenu = (e) => {
+    if (e.target !== backdrop || dismissed) return;
+    dismissed = true;
+    if (e.cancelable) e.preventDefault();
+    e.stopPropagation();
+    closeMessageMenu();
+    document.removeEventListener('keydown', onKey);
+    restoreKeyboardIfNeeded();
+  };
+  backdrop.addEventListener('touchend', dismissMenu, { passive: false });
+  backdrop.addEventListener('click', dismissMenu);
 
   menu.querySelectorAll('[data-menu-react]').forEach((btn) => {
-    btn.onclick = () => {
+    let reacted = false;
+    const handleReact = (e) => {
+      if (reacted) return;
+      reacted = true;
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
       haptic(10);
       closeMessageMenu();
       document.removeEventListener('keydown', onKey);
       toggleMessageReaction(msg, btn.dataset.menuReact);
+      restoreKeyboardIfNeeded();
     };
+    btn.addEventListener('touchend', handleReact, { passive: false });
+    btn.addEventListener('click', handleReact);
   });
 
   menu.querySelectorAll('[data-menu-action]').forEach((btn) => {
@@ -455,6 +488,7 @@ function openMessageMenu(msg, chat, anchorRect) {
         } catch {
           showToast('Copy is unavailable here');
         }
+        restoreKeyboardIfNeeded();
       } else if (action === 'edit') {
         state.replyingTo = null;
         state.editingMessage = { id: msg.id, conversationId: chat.id, text: msg.text };
@@ -470,6 +504,7 @@ function openMessageMenu(msg, chat, anchorRect) {
         } catch (error) {
           showToast(error.message || 'Could not delete message');
         }
+        restoreKeyboardIfNeeded();
       }
     };
   });
@@ -691,7 +726,7 @@ export function renderMessages({ preserveScroll = false } = {}) {
       if (e.target.closest(BUBBLE_INTERACTIVE)) return;
       if (Date.now() - lastTouchHeartAt < 600) return;
       haptic(12);
-      toggleMessageReaction(msg, '❤️');
+      toggleMessageReaction(msg, state.doubleTapEmoji || DEFAULT_DOUBLE_TAP_EMOJI);
     });
 
     let pressTimer = 0;
@@ -780,7 +815,7 @@ export function renderMessages({ preserveScroll = false } = {}) {
           lastBubbleTap = { id: '', time: 0 };
           lastTouchHeartAt = now;
           haptic(12);
-          toggleMessageReaction(msg, '❤️');
+          toggleMessageReaction(msg, state.doubleTapEmoji || DEFAULT_DOUBLE_TAP_EMOJI);
         } else {
           lastBubbleTap = { id: msg.id, time: now };
         }

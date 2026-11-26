@@ -1,3 +1,24 @@
+export const DEFAULT_REACTION_PALETTE = ['✨', '😆', '💖', '😢', '😭', '💀', '💜'];
+export const DEFAULT_DOUBLE_TAP_EMOJI = '❤️';
+
+function loadSavedReactionPalette() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('whisper-reaction-palette') || 'null');
+    if (Array.isArray(raw)) {
+      const cleaned = raw.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 8);
+      if (cleaned.length) return cleaned;
+    }
+  } catch {
+    // ignore malformed stored palette
+  }
+  return [...DEFAULT_REACTION_PALETTE];
+}
+
+function loadSavedDoubleTapEmoji() {
+  const saved = (localStorage.getItem('whisper-double-tap-emoji') || '').trim();
+  return saved || DEFAULT_DOUBLE_TAP_EMOJI;
+}
+
 const savedTheme = localStorage.getItem('whisper-theme') || 'aero';
 const savedSound = localStorage.getItem('whisper-sound') !== 'false';
 
@@ -23,9 +44,27 @@ export const state = {
   filter: 'all',
   query: '',
   soundEnabled: savedSound,
+  reactionPalette: loadSavedReactionPalette(),
+  doubleTapEmoji: loadSavedDoubleTapEmoji(),
   mediaUrlCache: new Map(),
   avatarUrlCache: new Map(),
 };
+
+export function setReactionPalette(list) {
+  const cleaned = Array.isArray(list)
+    ? list.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 8)
+    : [];
+  state.reactionPalette = cleaned.length ? cleaned : [...DEFAULT_REACTION_PALETTE];
+  localStorage.setItem('whisper-reaction-palette', JSON.stringify(state.reactionPalette));
+  return state.reactionPalette;
+}
+
+export function setDoubleTapEmoji(emoji) {
+  const cleaned = String(emoji || '').trim();
+  state.doubleTapEmoji = cleaned || DEFAULT_DOUBLE_TAP_EMOJI;
+  localStorage.setItem('whisper-double-tap-emoji', state.doubleTapEmoji);
+  return state.doubleTapEmoji;
+}
 
 export function getChat(chatId) {
   return state.chats.find((c) => c.id === chatId) || null;

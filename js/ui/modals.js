@@ -1,6 +1,13 @@
 import * as api from '../api.js';
-import { state } from '../state.js';
-import { $, avatarMarkup, closeModal, esc, openModal, showToast } from '../utils.js';
+import { searchEmojis } from '../emoji.js?v=20';
+import {
+  DEFAULT_DOUBLE_TAP_EMOJI,
+  DEFAULT_REACTION_PALETTE,
+  setDoubleTapEmoji,
+  setReactionPalette,
+  state,
+} from '../state.js';
+import { $, avatarMarkup, closeModal, esc, openModal, popUiLayer, pushUiLayer, showToast } from '../utils.js';
 import { renderChats, selectChat } from './chat.js';
 
 export function renderRequestsModal(activeTab = 'incoming', onRefreshInbox) {
@@ -271,57 +278,131 @@ export function openProfileModal(onProfileUpdated) {
   };
 }
 
-export async function openSettingsModal({ onThemeChange, onSignOut }) {
-  openModal(`
-    <h2>Settings</h2>
-    <p>Make Whisper feel like yours.</p>
-    <div class="settings-row">
-      <span>Appearance<small>Choose a visual style</small></span>
-      <select id="theme-select" class="field" style="width:135px;padding:8px">
-        <option value="aero">Windows Aero</option>
-        <option value="minimal">Minimal</option>
-        <option value="dark">Dark mode</option>
-      </select>
-    </div>
-    <div class="settings-row">
-      <span>Desktop notifications<small>Alerts while this browser is open</small></span>
-      <button class="secondary-btn" type="button" id="notify-enable">Enable</button>
-    </div>
-    <div class="settings-row">
-      <span>Sound alerts<small>Play a tone for new messages</small></span>
-      <input type="checkbox" id="sound-toggle" ${state.soundEnabled ? 'checked' : ''}>
-    </div>
-    <div class="security-section">
-      <div class="security-heading">Security &amp; Recovery</div>
-      <div class="settings-row">
-        <span>Two-factor authentication<small id="mfa-status-text">Checking…</small></span>
-        <button class="secondary-btn" type="button" id="mfa-toggle-btn" disabled>…</button>
-      </div>
-      <div id="mfa-enroll-area" class="hidden"></div>
-      <div class="settings-row">
-        <span>Backup recovery codes<small id="backup-status-text">Checking…</small></span>
-        <button class="secondary-btn" type="button" id="backup-gen-btn" disabled>Generate</button>
-      </div>
-      <div id="backup-codes-area" class="hidden"></div>
-    </div>
-    <div class="settings-row">
-      <span>Account<small>Signed in as @${esc(state.user.username)}</small></span>
-      <button class="secondary-btn" type="button" id="sign-out">Sign out</button>
-    </div>
-    <div class="modal-actions"><button class="primary-btn" value="cancel">Done</button></div>
-  `);
+export function isSettingsPageOpen() {
+  const page = $('#settings-page');
+  return Boolean(page && !page.classList.contains('hidden'));
+}
 
-  const themeSelect = $('#theme-select');
+export function closeSettingsPage(fromPop = false) {
+  const page = $('#settings-page');
+  if (!page || page.classList.contains('hidden')) return;
+  page.classList.add('hidden');
+  $('.workspace')?.classList.remove('settings-open');
+  $('#settings-open')?.classList.remove('selected');
+  $('#chats-tab')?.classList.add('selected');
+  if (!fromPop) popUiLayer();
+}
+
+export async function openSettingsPage({ onThemeChange, onSignOut }) {
+  const page = $('#settings-page');
+  if (!page) return;
+  const alreadyOpen = isSettingsPageOpen();
+  page.classList.remove('hidden');
+  $('.workspace')?.classList.add('settings-open');
+  $('#chats-tab')?.classList.remove('selected');
+  $('#settings-open')?.classList.add('selected');
+  if (!alreadyOpen) pushUiLayer('settings');
+
+  const palette = state.reactionPalette?.length ? state.reactionPalette : [...DEFAULT_REACTION_PALETTE];
+  const doubleTap = state.doubleTapEmoji || DEFAULT_DOUBLE_TAP_EMOJI;
+
+  page.innerHTML = `
+    <div class="settings-page-inner">
+      <div class="settings-page-head">
+        <button type="button" class="settings-back-btn" id="settings-back-btn" aria-label="Back to chats">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <div>
+          <h2>Settings</h2>
+          <p>Make Whisper feel like yours.</p>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">Appearance &amp; Alerts</div>
+        <div class="settings-row">
+          <span>Appearance<small>Choose a visual style</small></span>
+          <select id="theme-select" class="field" style="width:135px;padding:8px">
+            <option value="aero">Windows Aero</option>
+            <option value="minimal">Minimal</option>
+            <option value="dark">Dark mode</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <span>Desktop &amp; push notifications<small>Alerts when Whisper is in the background</small></span>
+          <button class="secondary-btn" type="button" id="notify-enable">Enable</button>
+        </div>
+        <div class="settings-row">
+          <span>Sound alerts<small>Play a tone for new messages</small></span>
+          <input type="checkbox" id="sound-toggle" ${state.soundEnabled ? 'checked' : ''}>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">Reactions</div>
+        <div class="settings-row">
+          <span>Double-tap reaction<small>Tap twice quickly on any message</small></span>
+          <button type="button" class="reaction-slot-btn" id="double-tap-emoji-btn" aria-label="Customize double-tap reaction">${esc(doubleTap)}</button>
+        </div>
+        <div class="settings-row settings-row-stack">
+          <div class="settings-row-head">
+            <span>Press &amp; hold reaction bar<small>Tap any slot below to replace its emoji</small></span>
+            <button type="button" class="secondary-btn" id="reset-reactions-btn">Reset</button>
+          </div>
+          <div class="reaction-slots" id="reaction-slots">
+            ${palette.map((emoji, idx) => `<button type="button" class="reaction-slot-btn" data-palette-slot="${idx}" aria-label="Reaction slot ${idx + 1}">${esc(emoji)}</button>`).join('')}
+          </div>
+          <div class="settings-emoji-picker hidden" id="settings-emoji-picker">
+            <div class="settings-emoji-picker-head">
+              <span id="settings-emoji-target-label">Pick an emoji</span>
+              <button type="button" class="secondary-btn" id="settings-emoji-close">Close</button>
+            </div>
+            <div class="settings-emoji-custom-row">
+              <input id="settings-emoji-search" class="field" type="search" placeholder="Search or paste any emoji…" autocomplete="off">
+              <button type="button" class="primary-btn" id="settings-emoji-use">Use</button>
+            </div>
+            <div class="emoji-grid settings-emoji-grid" id="settings-emoji-grid"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">Security &amp; Recovery</div>
+        <div class="settings-row">
+          <span>Two-factor authentication<small id="mfa-status-text">Checking…</small></span>
+          <button class="secondary-btn" type="button" id="mfa-toggle-btn" disabled>…</button>
+        </div>
+        <div id="mfa-enroll-area" class="hidden"></div>
+        <div class="settings-row">
+          <span>Backup recovery codes<small id="backup-status-text">Checking…</small></span>
+          <button class="secondary-btn" type="button" id="backup-gen-btn" disabled>Generate</button>
+        </div>
+        <div id="backup-codes-area" class="hidden"></div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">Account</div>
+        <div class="settings-row">
+          <span>Signed in<small>@${esc(state.user.username)}</small></span>
+          <button class="secondary-btn" type="button" id="sign-out">Sign out</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  $('#settings-back-btn', page).onclick = () => closeSettingsPage();
+
+  const themeSelect = $('#theme-select', page);
   themeSelect.value = state.user.theme;
   themeSelect.onchange = (e) => onThemeChange?.(e.target.value);
 
-  $('#sound-toggle').onchange = (e) => {
+  $('#sound-toggle', page).onchange = (e) => {
     state.soundEnabled = e.target.checked;
     localStorage.setItem('whisper-sound', state.soundEnabled ? 'true' : 'false');
     renderChats();
   };
 
-  $('#notify-enable').onclick = async () => {
+  $('#notify-enable', page).onclick = async () => {
     if (!('Notification' in window)) {
       showToast('Notifications are not supported in this browser');
       return;
@@ -335,12 +416,118 @@ export async function openSettingsModal({ onThemeChange, onSignOut }) {
     }
   };
 
-  $('#sign-out').onclick = async () => {
+  // Reaction customization
+  let activeTarget = null; // { kind: 'double' } | { kind: 'slot', index: number }
+  const pickerEl = $('#settings-emoji-picker', page);
+  const pickerLabelEl = $('#settings-emoji-target-label', page);
+  const pickerSearchEl = $('#settings-emoji-search', page);
+  const pickerGridEl = $('#settings-emoji-grid', page);
+  const doubleBtn = $('#double-tap-emoji-btn', page);
+
+  const clearEditingHighlight = () => {
+    doubleBtn?.classList.remove('editing');
+    page.querySelectorAll('[data-palette-slot]').forEach((b) => b.classList.remove('editing'));
+  };
+
+  const closeReactionPicker = () => {
+    activeTarget = null;
+    pickerEl?.classList.add('hidden');
+    clearEditingHighlight();
+  };
+
+  const applyEmojiChoice = (chosen) => {
+    const emoji = String(chosen || '').trim();
+    if (!emoji || !activeTarget) return;
+    if (activeTarget.kind === 'double') {
+      const saved = setDoubleTapEmoji(emoji);
+      if (doubleBtn) doubleBtn.textContent = saved;
+      showToast('Double-tap reaction updated');
+    } else {
+      const next = [...(state.reactionPalette?.length ? state.reactionPalette : DEFAULT_REACTION_PALETTE)];
+      next[activeTarget.index] = emoji;
+      const saved = setReactionPalette(next);
+      const slotBtn = page.querySelector(`[data-palette-slot="${activeTarget.index}"]`);
+      if (slotBtn) slotBtn.textContent = saved[activeTarget.index] || emoji;
+      showToast('Reaction bar updated');
+    }
+    closeReactionPicker();
+  };
+
+  const renderSettingsEmojiGrid = (query = '') => {
+    if (!pickerGridEl) return;
+    const matches = searchEmojis(query);
+    pickerGridEl.innerHTML = matches.length
+      ? matches
+          .map(
+            (item) =>
+              `<button type="button" class="emoji-cell" data-settings-emoji="${esc(item.emoji)}" title=":${esc(item.name)}:">${item.emoji}</button>`,
+          )
+          .join('')
+      : '<div class="people-empty">No matching emojis — paste any emoji above and tap Use.</div>';
+    pickerGridEl.querySelectorAll('[data-settings-emoji]').forEach((cell) => {
+      cell.onclick = () => applyEmojiChoice(cell.dataset.settingsEmoji);
+    });
+  };
+
+  const openReactionPicker = (target, triggerBtn) => {
+    const isSame =
+      activeTarget &&
+      activeTarget.kind === target.kind &&
+      (target.kind === 'double' || activeTarget.index === target.index);
+    if (isSame && !pickerEl.classList.contains('hidden')) {
+      closeReactionPicker();
+      return;
+    }
+    activeTarget = target;
+    clearEditingHighlight();
+    triggerBtn?.classList.add('editing');
+    pickerLabelEl.textContent =
+      target.kind === 'double'
+        ? 'Pick emoji for double-tap'
+        : `Pick emoji for bar slot ${target.index + 1}`;
+    pickerSearchEl.value = '';
+    renderSettingsEmojiGrid('');
+    pickerEl.classList.remove('hidden');
+  };
+
+  doubleBtn.onclick = () => openReactionPicker({ kind: 'double' }, doubleBtn);
+  page.querySelectorAll('[data-palette-slot]').forEach((btn) => {
+    btn.onclick = () =>
+      openReactionPicker({ kind: 'slot', index: Number(btn.dataset.paletteSlot) }, btn);
+  });
+
+  pickerSearchEl.oninput = (e) => renderSettingsEmojiGrid(e.target.value);
+  $('#settings-emoji-use', page).onclick = () => {
+    const raw = pickerSearchEl.value.trim();
+    if (!raw) {
+      showToast('Type or paste an emoji first');
+      return;
+    }
+    const matches = searchEmojis(raw);
+    const chosen = /^\p{Extended_Pictographic}/u.test(raw) ? raw : matches[0]?.emoji || raw;
+    applyEmojiChoice(chosen);
+  };
+  $('#settings-emoji-close', page).onclick = closeReactionPicker;
+
+  $('#reset-reactions-btn', page).onclick = () => {
+    const defDouble = setDoubleTapEmoji(DEFAULT_DOUBLE_TAP_EMOJI);
+    const defPalette = setReactionPalette(DEFAULT_REACTION_PALETTE);
+    if (doubleBtn) doubleBtn.textContent = defDouble;
+    page.querySelectorAll('[data-palette-slot]').forEach((btn) => {
+      const idx = Number(btn.dataset.paletteSlot);
+      if (defPalette[idx]) btn.textContent = defPalette[idx];
+    });
+    closeReactionPicker();
+    showToast('Reactions reset to defaults');
+  };
+
+  $('#sign-out', page).onclick = async () => {
+    closeSettingsPage(true);
     await onSignOut?.();
   };
 
   const renderBackupCodesBox = (codes, noticeText = 'Save these single-use codes somewhere safe. They work for 2FA recovery and instant password reset (no email needed).') => {
-    const area = $('#backup-codes-area');
+    const area = $('#backup-codes-area', page);
     if (!area) return;
     area.classList.remove('hidden');
     area.innerHTML = `
@@ -378,10 +565,10 @@ export async function openSettingsModal({ onThemeChange, onSignOut }) {
   let currentRemaining = 0;
 
   const refreshSecurityState = async () => {
-    const mfaText = $('#mfa-status-text');
-    const mfaBtn = $('#mfa-toggle-btn');
-    const backupText = $('#backup-status-text');
-    const backupBtn = $('#backup-gen-btn');
+    const mfaText = $('#mfa-status-text', page);
+    const mfaBtn = $('#mfa-toggle-btn', page);
+    const backupText = $('#backup-status-text', page);
+    const backupBtn = $('#backup-gen-btn', page);
     if (!mfaText || !mfaBtn || !backupText || !backupBtn) return;
 
     try {
@@ -421,7 +608,7 @@ export async function openSettingsModal({ onThemeChange, onSignOut }) {
           mfaBtn.disabled = true;
           try {
             const enrolled = await api.enrollTotp();
-            const area = $('#mfa-enroll-area');
+            const area = $('#mfa-enroll-area', page);
             area.classList.remove('hidden');
             area.innerHTML = `
               <div class="mfa-enroll-box">

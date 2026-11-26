@@ -1,6 +1,6 @@
 import { configured } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=19';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=20';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
@@ -22,9 +22,11 @@ import {
   updateTypingBanner,
 } from './ui/chat.js';
 import {
+  closeSettingsPage,
+  isSettingsPageOpen,
   openFindPeopleModal,
   openProfileModal,
-  openSettingsModal,
+  openSettingsPage,
   renderRequestsModal,
 } from './ui/modals.js';
 import {
@@ -206,6 +208,7 @@ async function resumeSync({ forceChatId = '' } = {}) {
       }
       await refreshInbox({ preserveActive: true });
       if (forceChatId) {
+        closeSettingsPage(true);
         if (getChat(forceChatId)) await selectChat(forceChatId, { forceSync: true });
         else pendingChatId = forceChatId;
       } else if (state.activeChatId) {
@@ -937,8 +940,14 @@ function wireEvents() {
     openFindPeopleModal(() => refreshInbox());
   $('#requests-tab').onclick = () => renderRequestsModal('incoming', () => refreshInbox());
   $('#profile-open').onclick = () => openProfileModal(updateUserBadge);
-  $('#settings-open').onclick = () =>
-    openSettingsModal({ onThemeChange: setTheme, onSignOut: handleSignOut });
+  $('#chats-tab').onclick = () => closeSettingsPage();
+  $('#settings-open').onclick = () => {
+    if (isSettingsPageOpen()) {
+      closeSettingsPage();
+    } else {
+      openSettingsPage({ onThemeChange: setTheme, onSignOut: handleSignOut });
+    }
+  };
   $('#theme-toggle').onclick = () => setTheme(state.user.theme === 'dark' ? 'aero' : 'dark');
 
   $('#back-btn').onclick = () => {
@@ -1090,6 +1099,10 @@ function wireEvents() {
     if ($('#modal')?.open) {
       closingModalFromPop = true;
       closeModal();
+      return;
+    }
+    if (isSettingsPageOpen()) {
+      closeSettingsPage(true);
       return;
     }
     if (!$('#details').classList.contains('hidden') && window.innerWidth <= 1050) {
