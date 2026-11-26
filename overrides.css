@@ -276,12 +276,25 @@ select:focus-visible {
 
 .compose-input {
   min-height: 44px;
-  padding: 8px 10px 8px 14px;
+  padding: 6px 8px 6px 14px;
+  align-items: flex-end;
+  gap: 6px;
 }
 
 .compose-input textarea {
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 22px;
+  min-height: 30px;
+  padding: 4px 0;
+}
+
+.emoji-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  margin: 0;
+  flex: none;
+  border-radius: 8px;
 }
 
 .send-btn {
@@ -1522,9 +1535,21 @@ body.dark .danger-btn {
   color: #fff;
 }
 
-/* Swipe-right reply indicator */
+/* Hide horizontal scrollbar on swipe & align PFP beside bubble */
+.messages {
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+}
+
 .message-row {
   position: relative;
+  align-items: flex-start;
+  overflow: visible;
+}
+
+.mini-avatar {
+  margin-top: 4px;
 }
 
 .swipe-reply-hint {
@@ -1547,10 +1572,44 @@ body.dark .danger-btn {
 }
 
 @media (pointer: coarse) {
+  .messages,
+  .message-row,
   .message-bubble {
     -webkit-touch-callout: none;
+    -webkit-user-select: none;
     user-select: none;
   }
+}
+
+.msg-spotlight-bubble {
+  max-width: min(300px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 13px;
+  background: #fff;
+  color: #223238;
+  font-size: 13.5px;
+  line-height: 1.45;
+  box-shadow: 0 10px 28px rgba(16, 30, 32, 0.24);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.msg-spotlight-bubble.mine {
+  background: #dff0e6;
+  color: #1d352a;
+}
+
+body.dark .msg-spotlight-bubble {
+  background: #202b29;
+  color: #e5eeeb;
+}
+
+body.dark .msg-spotlight-bubble.mine {
+  background: #344c40;
+  color: #e3eee7;
 }
 
 /* Unified right-click / press-and-hold floating message menu */

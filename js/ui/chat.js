@@ -283,6 +283,16 @@ function openMessageMenu(msg, chat, anchorRect) {
   const mine = msg.from === 'me';
   const backdrop = document.createElement('div');
   backdrop.className = 'msg-context-backdrop';
+  backdrop.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // Keep the top chat header unblurred above the backdrop
+  const headerRect = $('.chat-header')?.getBoundingClientRect();
+  const minTop = headerRect ? Math.max(8, Math.round(headerRect.bottom)) : 8;
+  backdrop.style.top = `${minTop}px`;
+
+  const previewText = msg.file
+    ? `${msg.file.isViewOnce ? '1× View once · ' : ''}${msg.file.name}${msg.text ? ` — ${msg.text}` : ''}`
+    : (msg.text || '');
 
   const menu = document.createElement('div');
   menu.className = 'msg-context-menu';
@@ -293,6 +303,7 @@ function openMessageMenu(msg, chat, anchorRect) {
         return `<button type="button" class="${active ? 'active' : ''}" data-menu-react="${esc(emoji)}">${emoji}</button>`;
       }).join('')}
     </div>
+    <div class="msg-spotlight-bubble ${mine ? 'mine' : 'theirs'}">${esc(previewText)}</div>
     <div class="msg-action-bar" role="menu">
       <button type="button" data-menu-action="reply">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
@@ -320,16 +331,17 @@ function openMessageMenu(msg, chat, anchorRect) {
   backdrop.append(menu);
   document.body.append(backdrop);
 
-  // Measure and clamp strictly within viewport
+  // Measure and clamp strictly within viewport below the header
   const rect = menu.getBoundingClientRect();
   const pad = 10;
+  const topBound = minTop + 8;
   const centerX = anchorRect.left + anchorRect.width / 2;
   const left = Math.max(pad, Math.min(window.innerWidth - rect.width - pad, centerX - rect.width / 2));
-  let top = anchorRect.top - rect.height - 8;
-  if (top < pad) {
-    top = Math.min(window.innerHeight - rect.height - pad, anchorRect.bottom + 8);
+  let top = anchorRect.top - 52;
+  if (top + rect.height > window.innerHeight - pad) {
+    top = window.innerHeight - rect.height - pad;
   }
-  top = Math.max(pad, Math.min(window.innerHeight - rect.height - pad, top));
+  top = Math.max(topBound, top);
 
   menu.style.left = `${Math.round(left)}px`;
   menu.style.top = `${Math.round(top)}px`;
@@ -559,6 +571,15 @@ export function renderMessages({ preserveScroll = false } = {}) {
     };
   });
 
+  // Prevent native browser long-press context menu inside message stream
+  box.oncontextmenu = (e) => {
+    if (e.target.closest('.message-row') || window.matchMedia('(pointer: coarse)').matches) {
+      e.preventDefault();
+    }
+  };
+
+  let lastTouchHeartAt = 0;
+
   // Wire right-click, long-press, double-tap/double-click, and swipe-right-to-reply
   box.querySelectorAll('.message-row').forEach((row) => {
     const msg = c.messages.find((x) => x.id === row.dataset.msgId);
@@ -569,12 +590,14 @@ export function renderMessages({ preserveScroll = false } = {}) {
 
     bubble.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       haptic(12);
       openMessageMenu(msg, c, bubble.getBoundingClientRect());
     });
 
     bubble.addEventListener('dblclick', (e) => {
       if (e.target.closest('button, a, video, input')) return;
+      if (Date.now() - lastTouchHeartAt < 600) return;
       haptic(12);
       toggleMessageReaction(msg, '❤️');
     });
@@ -586,6 +609,7 @@ export function renderMessages({ preserveScroll = false } = {}) {
     let swipeFired = false;
     let longPressFired = false;
     let moved = false;
+    let wasInputFocused = false;
 
     row.addEventListener('touchstart', (e) => {
       if (e.touches.length !== 1) return;
@@ -596,6 +620,7 @@ export function renderMessages({ preserveScroll = false } = {}) {
       swipeFired = false;
       longPressFired = false;
       moved = false;
+      wasInputFocused = document.activeElement === $('#message-input');
       wrap.style.transition = 'none';
 
       if (e.target.closest('.message-bubble')) {
@@ -604,7 +629,7 @@ export function renderMessages({ preserveScroll = false } = {}) {
           longPressFired = true;
           haptic(20);
           openMessageMenu(msg, c, bubble.getBoundingClientRect());
-        }, 420);
+        }, 400);
       }
     }, { passive: true });
 
@@ -614,12 +639,12 @@ export function renderMessages({ preserveScroll = false } = {}) {
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
 
-      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+      if (Math.abs(dx) > 15 || Math.abs(dy) > 15) {
         moved = true;
         clearTimeout(pressTimer);
       }
 
-      if (!swiping && dx > 12 && dx > Math.abs(dy) * 1.35) {
+      if (!swiping && dx > 14 && dx > Math.abs(dy) * 1.35) {
         swiping = true;
       }
 
@@ -653,17 +678,22 @@ export function renderMessages({ preserveScroll = false } = {}) {
 
       if (!moved && !longPressFired && e.target.closest('.message-bubble') && !e.target.closest('button, a, video')) {
         const now = Date.now();
-        if (lastBubbleTap.id === msg.id && (now - lastBubbleTap.time) < 280) {
+        if (lastBubbleTap.id === msg.id && (now - lastBubbleTap.time) < 350) {
           lastBubbleTap = { id: '', time: 0 };
+          lastTouchHeartAt = now;
+          if (e.cancelable) e.preventDefault();
           haptic(12);
           toggleMessageReaction(msg, '❤️');
+          if (wasInputFocused) {
+            $('#message-input')?.focus({ preventScroll: true });
+          }
         } else {
           lastBubbleTap = { id: msg.id, time: now };
         }
       }
     };
 
-    row.addEventListener('touchend', finishTouch, { passive: true });
+    row.addEventListener('touchend', finishTouch, { passive: false });
     row.addEventListener('touchcancel', () => {
       clearTimeout(pressTimer);
       wrap.style.transition = 'transform 0.18s ease-out';
@@ -704,16 +734,25 @@ export function renderMessages({ preserveScroll = false } = {}) {
 export function renderComposeContext() {
   const bar = $('#compose-context');
   if (!bar) return;
+  const keepKeyboard = (btn) => {
+    btn?.addEventListener('pointerdown', (e) => e.preventDefault());
+    btn?.addEventListener('mousedown', (e) => e.preventDefault());
+  };
   if (state.editingMessage) {
     bar.classList.remove('hidden');
     bar.innerHTML = `
       <div class="compose-ctx-text"><strong>Editing message</strong><span>${esc(state.editingMessage.text)}</span></div>
       <button type="button" class="compose-ctx-close" id="compose-ctx-cancel" aria-label="Cancel">×</button>
     `;
-    $('#compose-ctx-cancel', bar).onclick = () => {
+    const cancelBtn = $('#compose-ctx-cancel', bar);
+    keepKeyboard(cancelBtn);
+    cancelBtn.onclick = () => {
       clearComposeContext();
       const input = $('#message-input');
-      if (input) input.value = '';
+      if (input) {
+        input.value = '';
+        input.focus({ preventScroll: true });
+      }
     };
   } else if (state.replyingTo) {
     bar.classList.remove('hidden');
@@ -721,7 +760,13 @@ export function renderComposeContext() {
       <div class="compose-ctx-text"><strong>Replying to ${esc(state.replyingTo.senderName)}</strong><span>${esc(state.replyingTo.text)}</span></div>
       <button type="button" class="compose-ctx-close" id="compose-ctx-cancel" aria-label="Cancel">×</button>
     `;
-    $('#compose-ctx-cancel', bar).onclick = clearComposeContext;
+    const cancelBtn = $('#compose-ctx-cancel', bar);
+    keepKeyboard(cancelBtn);
+    cancelBtn.onclick = () => {
+      const wasFocused = document.activeElement === $('#message-input');
+      clearComposeContext();
+      if (wasFocused) $('#message-input')?.focus({ preventScroll: true });
+    };
   } else {
     bar.classList.add('hidden');
     bar.innerHTML = '';
@@ -763,12 +808,19 @@ export function renderAttachmentPreview() {
     <button type="button" class="compose-ctx-close" id="att-prev-remove" aria-label="Remove attachment">×</button>
   `;
 
-  $('#att-vo-toggle', bar).onclick = () => {
+  const voBtn = $('#att-vo-toggle', bar);
+  const rmBtn = $('#att-prev-remove', bar);
+  [voBtn, rmBtn].forEach((b) => {
+    b?.addEventListener('pointerdown', (e) => e.preventDefault());
+    b?.addEventListener('mousedown', (e) => e.preventDefault());
+  });
+
+  voBtn.onclick = () => {
     haptic(10);
     state.pendingAttachment.isViewOnce = !state.pendingAttachment.isViewOnce;
     renderAttachmentPreview();
   };
-  $('#att-prev-remove', bar).onclick = () => {
+  rmBtn.onclick = () => {
     clearPendingAttachment();
   };
 }

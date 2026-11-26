@@ -1,5 +1,6 @@
 import { configured } from './config.js';
 import * as api from './api.js';
+import { replaceEmojiShortcodes } from './emoji.js';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
@@ -422,7 +423,7 @@ async function handleSignOut() {
 async function handleSendText() {
   const c = getActiveChat();
   const input = $('#message-input');
-  const txt = input?.value.trim() || '';
+  const txt = replaceEmojiShortcodes(input?.value.trim() || '');
   const pending = state.pendingAttachment;
   if (!c || (!txt && !pending)) return;
 
@@ -673,6 +674,24 @@ function wireEvents() {
     }
   };
 
+  function stageAttachmentFile(file) {
+    const c = getActiveChat();
+    if (!file || !c) return;
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('Attachments must be 10 MB or smaller');
+      return;
+    }
+    if (state.pendingAttachment?.previewUrl) {
+      URL.revokeObjectURL(state.pendingAttachment.previewUrl);
+    }
+    const previewUrl = (file.type?.startsWith('image/') || file.type?.startsWith('video/'))
+      ? URL.createObjectURL(file)
+      : '';
+    state.pendingAttachment = { file, previewUrl, isViewOnce: false };
+    renderAttachmentPreview();
+    $('#message-input')?.focus({ preventScroll: true });
+  }
+
   const sendBtn = $('.send-btn');
   sendBtn?.addEventListener('pointerdown', (e) => e.preventDefault());
   sendBtn?.addEventListener('mousedown', (e) => e.preventDefault());
@@ -692,43 +711,80 @@ function wireEvents() {
   });
 
   $('#message-input').addEventListener('input', (e) => {
-    e.target.style.height = 'auto';
-    e.target.style.height = `${Math.min(110, e.target.scrollHeight)}px`;
+    const el = e.target;
+    if (el.value.includes(':')) {
+      const caret = el.selectionStart ?? el.value.length;
+      const before = el.value.slice(0, caret);
+      const after = el.value.slice(caret);
+      const replacedBefore = replaceEmojiShortcodes(before);
+      if (replacedBefore !== before) {
+        el.value = replacedBefore + after;
+        el.setSelectionRange(replacedBefore.length, replacedBefore.length);
+      }
+    }
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(110, el.scrollHeight)}px`;
     const c = getActiveChat();
-    if (c && e.target.value.trim()) sendTypingSignal(c.id, state.user.id, true);
+    if (c && el.value.trim()) sendTypingSignal(c.id, state.user.id, true);
+  });
+
+  $('#message-input').addEventListener('paste', (e) => {
+    const items = [...(e.clipboardData?.items || [])];
+    const fileItem = items.find((it) => it.kind === 'file');
+    const rawFile = fileItem?.getAsFile() || e.clipboardData?.files?.[0];
+    if (!rawFile) return;
+    e.preventDefault();
+    const ext = (rawFile.type?.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+    const file = rawFile.name && rawFile.name !== 'image.png'
+      ? rawFile
+      : new File([rawFile], `pasted-${Date.now()}.${ext}`, { type: rawFile.type || 'image/png' });
+    stageAttachmentFile(file);
   });
 
   $('#attach-btn').onclick = () => $('#file-input').click();
   $('#file-input').onchange = (event) => {
     const file = event.target.files[0];
-    const c = getActiveChat();
-    if (!file || !c) return;
-    if (file.size > 10 * 1024 * 1024) {
-      showToast('Attachments must be 10 MB or smaller');
-      event.target.value = '';
-      return;
-    }
-    if (state.pendingAttachment?.previewUrl) {
-      URL.revokeObjectURL(state.pendingAttachment.previewUrl);
-    }
-    const previewUrl = (file.type?.startsWith('image/') || file.type?.startsWith('video/'))
-      ? URL.createObjectURL(file)
-      : '';
-    state.pendingAttachment = { file, previewUrl, isViewOnce: false };
-    renderAttachmentPreview();
-    $('#message-input')?.focus({ preventScroll: true });
+    if (file) stageAttachmentFile(file);
     event.target.value = '';
   };
 
-  $('#emoji-btn').onclick = () => $('#emoji-pop').classList.toggle('hidden');
+  const emojiBtn = $('#emoji-btn');
+  emojiBtn?.addEventListener('pointerdown', (e) => e.preventDefault());
+  emojiBtn?.addEventListener('mousedown', (e) => e.preventDefault());
+  emojiBtn.onclick = () => $('#emoji-pop').classList.toggle('hidden');
   $('#emoji-pop').querySelectorAll('button').forEach((btn) => {
+    btn.addEventListener('pointerdown', (e) => e.preventDefault());
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
     btn.onclick = () => {
       const input = $('#message-input');
       input.value += [...btn.textContent][0];
       $('#emoji-pop').classList.add('hidden');
-      input.focus();
+      input.focus({ preventScroll: true });
     };
   });
+
+  // Keep mobile open conversation & chat header pinned inside visualViewport when keyboard opens
+  if (window.visualViewport) {
+    const syncViewport = () => {
+      const conv = $('#conversation');
+      if (!conv) return;
+      if (window.innerWidth <= 700 && conv.classList.contains('mobile-open')) {
+        const vv = window.visualViewport;
+        conv.style.height = `${Math.round(vv.height)}px`;
+        conv.style.top = `${Math.round(vv.offsetTop)}px`;
+        conv.style.bottom = 'auto';
+        const box = $('#messages');
+        if (box) box.scrollTop = box.scrollHeight;
+      } else {
+        conv.style.height = '';
+        conv.style.top = '';
+        conv.style.bottom = '';
+      }
+    };
+    window.visualViewport.addEventListener('resize', syncViewport);
+    window.visualViewport.addEventListener('scroll', syncViewport);
+    window.addEventListener('resize', syncViewport);
+  }
 
   $('#new-chat').onclick = $('#empty-add').onclick = $('#contacts-tab').onclick = () =>
     openFindPeopleModal(() => refreshInbox());

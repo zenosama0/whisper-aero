@@ -1,11 +1,11 @@
-const CACHE = 'whisper-shell-v11';
+const CACHE = 'whisper-shell-v12';
 const FILES = [
   './',
   './index.html',
-  './styles.css?v=11',
-  './auth.css?v=11',
-  './overrides.css?v=11',
-  './app.js?v=11',
+  './styles.css?v=12',
+  './auth.css?v=12',
+  './overrides.css?v=12',
+  './app.js?v=12',
   './app-config.js',
   './manifest.webmanifest',
   './icon.svg',
@@ -13,6 +13,7 @@ const FILES = [
   './icon-192.png',
   './icon-512.png',
   './js/config.js',
+  './js/emoji.js',
   './js/utils.js',
   './js/state.js',
   './js/api.js',
