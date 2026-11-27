@@ -1,5 +1,5 @@
 import * as api from '../api.js';
-import { searchEmojis } from '../emoji.js?v=26';
+import { searchEmojis } from '../emoji.js?v=27';
 import {
   getNativeCapabilities,
   isNativeAndroid,
@@ -12,14 +12,19 @@ import {
   setNativeBackgroundSync,
   setWindowsMinimizeToTray,
   setWindowsStartup,
-} from '../native.js?v=26';
+} from '../native.js?v=27';
 import {
   CHAT_THEME_PRESETS,
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,
+  getDisplayName,
+  getEffectiveChatTheme,
   resetChatTheme,
+  resetPerChatTheme,
   setChatTheme,
   setDoubleTapEmoji,
+  setFriendNickname,
+  setPerChatTheme,
   setReactionPalette,
   state,
 } from '../state.js';
@@ -384,7 +389,44 @@ export function openPeoplePage(onRefreshInbox = lastRefreshCb) {
   if (window.innerWidth > 700) setTimeout(() => input?.focus(), 30);
 }
 
+function prepareAvatarUpload(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onerror = () => resolve(file);
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => resolve(file);
+      img.onload = () => {
+        const maxEdge = 900;
+        const scale = Math.min(1, maxEdge / Math.max(img.width || 1, img.height || 1));
+        const w = Math.max(1, Math.round((img.width || 1) * scale));
+        const h = Math.max(1, Math.round((img.height || 1) * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              resolve(file);
+              return;
+            }
+            resolve(new File([blob], 'avatar.jpg', { type: 'image/jpeg' }));
+          },
+          'image/jpeg',
+          0.86,
+        );
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export function openProfileModal(onProfileUpdated) {
+  let stagedFile = null;
+  let previewObjectUrl = '';
+
   openModal(`
     <h2>Your profile</h2>
     <p>This name and photo appear in your conversations.</p>
@@ -401,41 +443,223 @@ export function openProfileModal(onProfileUpdated) {
     <label class="field-label">About</label>
     <input class="field" id="profile-about" maxlength="160" value="${esc(state.user.about)}">
     <label class="field-label">Profile photo</label>
-    <input class="field" id="profile-photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif">
-    <div class="field-help">Image up to 500 KB.</div>
+    <div class="profile-photo-picker">
+      <input id="profile-photo" type="file" accept="image/*" hidden>
+      <button type="button" class="secondary-btn" id="profile-photo-pick-btn">Choose photo</button>
+      <span class="profile-photo-name" id="profile-photo-name">${state.user.avatar ? 'Current photo active' : 'No photo selected'}</span>
+    </div>
+    <div class="field-help">Large photos are automatically cropped and compressed on upload.</div>
     <div class="modal-actions">
       <button class="secondary-btn" value="cancel">Cancel</button>
       <button class="primary-btn" type="button" id="save-profile">Save changes</button>
     </div>
   `);
 
-  $('#profile-avatar-preview')?.addEventListener('click', () => openAvatarLightbox(state.user));
+  $('#profile-avatar-preview')?.addEventListener('click', () => {
+    openAvatarLightbox(previewObjectUrl ? { ...state.user, avatar: previewObjectUrl } : state.user);
+  });
+
+  $('#profile-photo-pick-btn')?.addEventListener('click', () => $('#profile-photo')?.click());
+
+  $('#profile-photo')?.addEventListener('change', (e) => {
+    const picked = e.target.files?.[0];
+    if (!picked) return;
+    if (picked.size > 12 * 1024 * 1024) {
+      showToast('Source photo must be 12 MB or smaller');
+      e.target.value = '';
+      return;
+    }
+    stagedFile = picked;
+    if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+    previewObjectUrl = URL.createObjectURL(picked);
+    const previewBtn = $('#profile-avatar-preview');
+    if (previewBtn) {
+      previewBtn.innerHTML = `<span class="avatar avatar-large" style="background-image:url('${esc(previewObjectUrl)}');background-size:cover;background-position:center"></span>`;
+    }
+    const nameEl = $('#profile-photo-name');
+    if (nameEl) nameEl.textContent = picked.name;
+  });
 
   $('#save-profile').onclick = async () => {
     const displayName = $('#profile-name-input').value.trim();
     const about = $('#profile-about').value.trim();
-    const file = $('#profile-photo').files[0];
     if (!displayName) {
       showToast('Display name is required');
       return;
     }
-    if (file && file.size > 512000) {
-      showToast('Profile photo must be under 500 KB');
-      return;
-    }
     $('#save-profile').disabled = true;
+    $('#save-profile').textContent = stagedFile ? 'Optimizing…' : 'Saving…';
     try {
-      const updated = await api.updateProfile({ displayName, about, file });
+      const uploadFile = stagedFile ? await prepareAvatarUpload(stagedFile) : null;
+      const updated = await api.updateProfile({ displayName, about, file: uploadFile });
       state.user.name = updated.display_name;
       state.user.about = updated.about;
       state.user.avatar = updated.avatar;
+      if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
       onProfileUpdated?.();
       closeModal();
       showToast('Profile updated');
     } catch (error) {
       $('#save-profile').disabled = false;
+      $('#save-profile').textContent = 'Save changes';
       showToast(error.message || 'Profile could not be saved');
     }
+  };
+}
+
+export function openNicknameModal(chat, onUpdated) {
+  if (!chat?.peerId) return;
+  const currentNick = String(state.nicknames?.[chat.peerId] || '');
+  openModal(`
+    <h2>Nickname</h2>
+    <p>Only visible to you for <b>${esc(chat.name)}</b> (@${esc(chat.username)}).</p>
+    <label class="field-label" for="nickname-modal-input">Custom nickname</label>
+    <input class="field" id="nickname-modal-input" maxlength="48" placeholder="${esc(chat.name)}" value="${esc(currentNick)}">
+    <div class="modal-actions">
+      ${currentNick ? '<button class="secondary-btn" type="button" id="nickname-clear-btn">Clear</button>' : '<button class="secondary-btn" value="cancel">Cancel</button>'}
+      <button class="primary-btn" type="button" id="nickname-save-btn">Save nickname</button>
+    </div>
+  `);
+
+  const input = $('#nickname-modal-input');
+  setTimeout(() => {
+    input?.focus();
+    input?.select();
+  }, 40);
+
+  $('#nickname-clear-btn')?.addEventListener('click', () => {
+    setFriendNickname(chat.peerId, '');
+    onUpdated?.();
+    closeModal();
+    showToast('Nickname cleared');
+  });
+
+  $('#nickname-save-btn').onclick = () => {
+    const val = input?.value.trim() || '';
+    setFriendNickname(chat.peerId, val);
+    onUpdated?.();
+    closeModal();
+    showToast(val ? `Nickname set to "${val}"` : 'Nickname cleared');
+  };
+}
+
+export function openChatThemeModal(chat, onThemeChange) {
+  if (!chat?.id) return;
+  const t = getEffectiveChatTheme(chat.id);
+  const label = getDisplayName(chat);
+  openModal(`
+    <h2>Chat theme · ${esc(label)}</h2>
+    <p>Customize bubble colors and wallpaper just for this conversation.</p>
+    <div class="chat-theme-preview" id="m-ctp-preview">
+      <div class="chat-theme-preview-dim" id="m-ctp-dim"></div>
+      <div class="ctp-bubble theirs" id="m-ctp-theirs">Hey, loving this vibe!</div>
+      <div class="ctp-bubble mine" id="m-ctp-mine">Just for our chat ✨</div>
+    </div>
+    <div class="theme-presets" id="m-ctp-presets">
+      ${CHAT_THEME_PRESETS.map((p) => `<button type="button" class="theme-preset-pill" data-m-preset="${esc(p.id)}">${esc(p.label)}</button>`).join('')}
+    </div>
+    <div class="settings-row">
+      <span>Your bubble<small>Outgoing tint</small></span>
+      <input type="color" class="color-swatch-input" id="m-mine-color" value="${esc(t.mineBg || '#70a993')}">
+    </div>
+    <div class="settings-row">
+      <span>Their bubble<small>Incoming tint</small></span>
+      <input type="color" class="color-swatch-input" id="m-theirs-color" value="${esc(t.theirsBg || '#ffffff')}">
+    </div>
+    <div class="settings-row">
+      <span>Wallpaper<small id="m-bg-status">${t.bgImage ? 'Custom photo active' : 'Optional chat background'}</small></span>
+      <div style="display:flex;gap:8px;flex:none">
+        <input type="file" id="m-bg-file" accept="image/*" hidden>
+        <button type="button" class="secondary-btn" id="m-bg-upload">Choose photo</button>
+        <button type="button" class="secondary-btn ${t.bgImage ? '' : 'hidden'}" id="m-bg-clear">Remove</button>
+      </div>
+    </div>
+    <div class="settings-row">
+      <span>Wallpaper dim<small>Keep text crisp</small></span>
+      <input type="range" id="m-bg-dim" min="0" max="75" value="${Math.round((t.bgDim ?? 0.22) * 100)}" style="width:110px">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary-btn" type="button" id="m-theme-reset">Use global default</button>
+      <button class="primary-btn" value="cancel">Done</button>
+    </div>
+  `);
+
+  const syncModalPreview = () => {
+    const cur = getEffectiveChatTheme(chat.id);
+    const prev = $('#m-ctp-preview');
+    const dimEl = $('#m-ctp-dim');
+    const mineEl = $('#m-ctp-mine');
+    const theirsEl = $('#m-ctp-theirs');
+    if (prev) {
+      prev.style.backgroundImage = cur.bgImage ? `url("${cur.bgImage}")` : '';
+      prev.classList.toggle('has-bg', Boolean(cur.bgImage));
+    }
+    if (dimEl) dimEl.style.opacity = cur.bgImage ? String(cur.bgDim ?? 0.22) : '0';
+    if (mineEl) {
+      mineEl.style.background = cur.mineBg || '';
+      mineEl.style.color = cur.mineText || '';
+    }
+    if (theirsEl) {
+      theirsEl.style.background = cur.theirsBg || '';
+      theirsEl.style.color = cur.theirsText || '';
+    }
+    const bgStatus = $('#m-bg-status');
+    const bgClear = $('#m-bg-clear');
+    if (bgStatus) bgStatus.textContent = cur.bgImage ? 'Custom photo active' : 'Optional chat background';
+    if (bgClear) bgClear.classList.toggle('hidden', !cur.bgImage);
+    document.querySelectorAll('[data-m-preset]').forEach((pill) => {
+      const p = CHAT_THEME_PRESETS.find((x) => x.id === pill.dataset.mPreset);
+      pill.classList.toggle('active', Boolean(p && (cur.mineBg || '') === p.mineBg && (cur.theirsBg || '') === p.theirsBg));
+    });
+    onThemeChange?.();
+  };
+
+  syncModalPreview();
+
+  document.querySelectorAll('[data-m-preset]').forEach((pill) => {
+    pill.onclick = () => {
+      const p = CHAT_THEME_PRESETS.find((x) => x.id === pill.dataset.mPreset);
+      if (!p) return;
+      setPerChatTheme(chat.id, { mineBg: p.mineBg, theirsBg: p.theirsBg });
+      syncModalPreview();
+    };
+  });
+
+  $('#m-mine-color').oninput = (e) => {
+    setPerChatTheme(chat.id, { mineBg: e.target.value });
+    syncModalPreview();
+  };
+  $('#m-theirs-color').oninput = (e) => {
+    setPerChatTheme(chat.id, { theirsBg: e.target.value });
+    syncModalPreview();
+  };
+  $('#m-bg-upload').onclick = () => $('#m-bg-file')?.click();
+  $('#m-bg-file').onchange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await compressWallpaperImage(file);
+      setPerChatTheme(chat.id, { bgImage: dataUrl });
+      syncModalPreview();
+      showToast('Chat wallpaper updated');
+    } catch (error) {
+      showToast(error.message || 'Could not apply wallpaper');
+    }
+    e.target.value = '';
+  };
+  $('#m-bg-clear').onclick = () => {
+    setPerChatTheme(chat.id, { bgImage: '' });
+    syncModalPreview();
+    showToast('Chat wallpaper removed');
+  };
+  $('#m-bg-dim').oninput = (e) => {
+    setPerChatTheme(chat.id, { bgDim: Number(e.target.value) / 100 });
+    syncModalPreview();
+  };
+  $('#m-theme-reset').onclick = () => {
+    resetPerChatTheme(chat.id);
+    syncModalPreview();
+    showToast('Restored default chat theme');
   };
 }
 

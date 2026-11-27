@@ -10,6 +10,20 @@ export const esc = (value) =>
     "'": '&#39;',
   }[ch]));
 
+export function linkifyEscapedText(value) {
+  const safe = esc(value);
+  return safe.replace(/https?:\/\/[^\s<>"']+/gi, (rawUrl) => {
+    let url = rawUrl;
+    let trail = '';
+    while (/[.,!?;:)\]]$/.test(url)) {
+      if (url.endsWith(')') && (url.match(/\(/g) || []).length >= (url.match(/\)/g) || []).length) break;
+      trail = url.slice(-1) + trail;
+      url = url.slice(0, -1);
+    }
+    return `<a class="msg-link" href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>${trail}`;
+  });
+}
+
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const isUuid = (value) => UUID_RE.test(String(value || ''));
 
@@ -156,6 +170,47 @@ export function playNotificationChime(enabled = true, type = 'message') {
   } catch {
     // Audio playback may be blocked prior to user interaction.
   }
+}
+
+let activeCallRingTimer = 0;
+
+export function stopCallRingtone() {
+  if (activeCallRingTimer) {
+    clearInterval(activeCallRingTimer);
+    activeCallRingTimer = 0;
+  }
+}
+
+export function startCallRingtone() {
+  stopCallRingtone();
+  const playBurst = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      const notes = [784, 988, 784, 988];
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, now + i * 0.16);
+        gain.gain.setValueAtTime(0.001, now + i * 0.16);
+        gain.gain.exponentialRampToValueAtTime(0.14, now + i * 0.16 + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.16 + 0.14);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + i * 0.16);
+        osc.stop(now + i * 0.16 + 0.15);
+      });
+      setTimeout(() => ctx.close().catch(() => {}), 800);
+    } catch {
+      // Ignore WebAudio restrictions
+    }
+    haptic([240, 120, 240]);
+  };
+  playBurst();
+  activeCallRingTimer = setInterval(playBurst, 1500);
 }
 
 export function haptic(pattern = 15) {

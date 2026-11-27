@@ -193,13 +193,21 @@ export async function updateProfile({ displayName, about, file }) {
   if (!user) throw new Error('Sign in again to update your profile.');
   const changes = { display_name: displayName, about };
   if (file) {
-    const ext = (file.name.split('.').pop() || 'png').toLowerCase();
-    const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
-    const { error: uploadError } = await supabase.storage
-      .from('profile-avatars')
-      .upload(path, file, { upsert: true, contentType: file.type });
-    if (uploadError) throw uploadError;
-    changes.avatar_path = path;
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error('Sign in again to update your profile.');
+    const form = new FormData();
+    form.set('file', file);
+    const resp = await fetch(`${config.supabaseUrl}/functions/v1/profile-avatar`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        apikey: config.supabaseAnonKey,
+      },
+      body: form,
+    });
+    const result = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(result.error || 'Could not process profile photo.');
+    if (result.avatar_path) changes.avatar_path = result.avatar_path;
   }
   const { error } = await supabase.from('profiles').update(changes).eq('id', user.id);
   if (error) throw error;
@@ -799,7 +807,7 @@ export async function registerWebPush() {
   return res.ok;
 }
 
-export async function triggerPushNotification({ conversationId = '', targetUserId = '', title = 'Whisper', body = '', tag = 'whisper' }) {
+export async function triggerPushNotification({ conversationId = '', targetUserId = '', title = 'Whisper', body = '', tag = 'whisper', kind = '' }) {
   try {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) return;
@@ -810,7 +818,7 @@ export async function triggerPushNotification({ conversationId = '', targetUserI
         apikey: config.supabaseAnonKey,
         Authorization: `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ action: 'notify', conversationId, targetUserId, title, body, tag }),
+      body: JSON.stringify({ action: 'notify', conversationId, targetUserId, title, body, tag, kind }),
     });
   } catch {
     // Background push is best-effort and must not block foreground messaging.

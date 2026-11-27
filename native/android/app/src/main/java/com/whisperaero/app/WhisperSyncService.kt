@@ -264,14 +264,11 @@ class WhisperSyncService : Service() {
                     if (record.optString("caller_id") == session.userId) return
                     val convId = record.optString("conversation_id")
                     val meta = SessionStore.getPeerMeta(this, convId)
-                    NotificationHelper.show(
+                    NotificationHelper.showIncomingCallAlarm(
                         this,
                         conversationId = convId,
-                        title = "Incoming call",
-                        body = "${meta.name} is trying to reach you.",
+                        callerName = meta.name,
                         iconUrl = meta.avatar,
-                        tag = if (convId.isNotBlank()) "whisper-call-$convId" else "whisper-call",
-                        messageId = "call-${record.optString("id")}",
                     )
                 }
             }

@@ -16,6 +16,9 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.RingtoneManager
 import android.os.Build
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
@@ -42,8 +45,10 @@ object NotificationHelper {
     const val CHANNEL_MESSAGES = "whisper_messages_v2"
     private const val LEGACY_CHANNEL_MESSAGES = "whisper_messages"
     const val CHANNEL_CALLS = "whisper_calls"
+    const val CHANNEL_CALLS_ALARM = "whisper_calls_alarm_v2"
     const val CHANNEL_SERVICE = "whisper_service"
     const val SERVICE_NOTIF_ID = 7001
+    private const val CALL_NOTIF_OFFSET = 44000
 
     const val EXTRA_CHAT_ID = "conversationId"
     const val KEY_REPLY_TEXT = "key_reply_text"
@@ -88,6 +93,27 @@ object NotificationHelper {
             enableVibration(true)
         }
 
+        val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+        val alarmAttr = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        val callsAlarm = NotificationChannel(
+            CHANNEL_CALLS_ALARM,
+            "Incoming call ring",
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "Full-screen ringing alert when a contact calls you"
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 600, 350, 600, 350, 800)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            if (ringtoneUri != null) setSound(ringtoneUri, alarmAttr)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                setBypassDnd(true)
+            }
+        }
+
         val service = NotificationChannel(
             CHANNEL_SERVICE,
             "Background connection",
@@ -101,6 +127,7 @@ object NotificationHelper {
 
         nm.createNotificationChannel(messages)
         nm.createNotificationChannel(calls)
+        nm.createNotificationChannel(callsAlarm)
         nm.createNotificationChannel(service)
     }
 
@@ -485,6 +512,101 @@ object NotificationHelper {
             chatHistory.remove(conversationId)
         }
         NotificationManagerCompat.from(context).cancel(conversationId.hashCode())
+    }
+
+    private fun callNotifId(conversationId: String): Int =
+        CALL_NOTIF_OFFSET + ((conversationId.ifBlank { "call" }.hashCode()) and 0x7FFF)
+
+    fun showIncomingCallAlarm(
+        context: Context,
+        conversationId: String,
+        callerName: String,
+        iconUrl: String,
+    ) {
+        ensureChannels(context)
+        val peerTitle = callerName.ifBlank { "Whisper contact" }
+        val notifId = callNotifId(conversationId)
+
+        ioPool.execute {
+            val (largeIcon, _) = loadAvatarBitmaps(context, iconUrl, conversationId, peerTitle)
+
+            val fullScreenIntent = Intent(context, IncomingCallActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(EXTRA_CHAT_ID, conversationId)
+                putExtra(IncomingCallActivity.EXTRA_CALLER_NAME, peerTitle)
+                putExtra(IncomingCallActivity.EXTRA_ICON_URL, iconUrl)
+            }
+            val fullScreenPending = PendingIntent.getActivity(
+                context,
+                notifId + 1,
+                fullScreenIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            val answerIntent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                if (conversationId.isNotBlank()) putExtra(EXTRA_CHAT_ID, conversationId)
+            }
+            val answerPending = PendingIntent.getActivity(
+                context,
+                notifId + 2,
+                answerIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            val dismissIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+                action = NotificationActionReceiver.ACTION_DISMISS_CALL
+                putExtra(EXTRA_CHAT_ID, conversationId)
+            }
+            val dismissPending = PendingIntent.getBroadcast(
+                context,
+                notifId + 3,
+                dismissIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            val ringUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+
+            val notif = NotificationCompat.Builder(context, CHANNEL_CALLS_ALARM)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle("$peerTitle is calling")
+                .setContentText("Tap Open Chat or Dismiss")
+                .setLargeIcon(largeIcon)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setOngoing(true)
+                .setAutoCancel(false)
+                .setVibrate(longArrayOf(0, 600, 350, 600, 350, 800))
+                .apply {
+                    if (ringUri != null) setSound(ringUri, AudioManager.STREAM_RING)
+                }
+                .setFullScreenIntent(fullScreenPending, true)
+                .setContentIntent(fullScreenPending)
+                .addAction(0, "Dismiss", dismissPending)
+                .addAction(R.drawable.ic_notification, "Open Chat", answerPending)
+                .build().apply {
+                    flags = flags or Notification.FLAG_INSISTENT
+                }
+
+            if (isPermissionGranted(context)) {
+                try {
+                    NotificationManagerCompat.from(context).notify(notifId, notif)
+                } catch (_: SecurityException) {
+                }
+            }
+            try {
+                context.startActivity(fullScreenIntent)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    fun clearIncomingCall(context: Context, conversationId: String) {
+        NotificationManagerCompat.from(context).cancel(callNotifId(conversationId))
+        val stopIntent = Intent(IncomingCallActivity.ACTION_STOP_RING).setPackage(context.packageName)
+        context.sendBroadcast(stopIntent)
     }
 
     private fun loadAvatarBitmaps(

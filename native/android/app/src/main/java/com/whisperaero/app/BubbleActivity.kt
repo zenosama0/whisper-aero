@@ -37,6 +37,7 @@ class BubbleActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var activeChatId: String = ""
+    private var initialChatDelivered = false
 
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -135,7 +136,8 @@ class BubbleActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                if (activeChatId.isNotBlank() && activeChatId != "whisper-preview") {
+                if (!initialChatDelivered && activeChatId.isNotBlank() && activeChatId != "whisper-preview") {
+                    initialChatDelivered = true
                     openChatInWeb(activeChatId)
                 }
             }

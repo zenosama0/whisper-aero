@@ -61,6 +61,36 @@ function loadSavedDoubleTapEmoji() {
   return saved || DEFAULT_DOUBLE_TAP_EMOJI;
 }
 
+function loadSavedNicknames() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('whisper-nicknames-v1') || 'null');
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  } catch {
+    // ignore malformed nicknames
+  }
+  return {};
+}
+
+function loadSavedPerChatThemes() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('whisper-chat-themes-v1') || 'null');
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  } catch {
+    // ignore malformed per-chat themes
+  }
+  return {};
+}
+
+function loadSavedDrafts() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('whisper-drafts-v1') || 'null');
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  } catch {
+    // ignore malformed drafts
+  }
+  return {};
+}
+
 const savedTheme = localStorage.getItem('whisper-theme') || 'aero';
 const savedSound = localStorage.getItem('whisper-sound') !== 'false';
 
@@ -89,9 +119,94 @@ export const state = {
   reactionPalette: loadSavedReactionPalette(),
   doubleTapEmoji: loadSavedDoubleTapEmoji(),
   chatTheme: loadSavedChatTheme(),
+  chatThemesById: loadSavedPerChatThemes(),
+  nicknames: loadSavedNicknames(),
+  drafts: loadSavedDrafts(),
   mediaUrlCache: new Map(),
   avatarUrlCache: new Map(),
 };
+
+export function getDisplayName(chatOrPeer) {
+  if (!chatOrPeer) return 'Whisper';
+  const peerId = chatOrPeer.peerId || chatOrPeer.id;
+  const nick = peerId ? String(state.nicknames?.[peerId] || '').trim() : '';
+  return nick || chatOrPeer.name || chatOrPeer.display_name || chatOrPeer.username || 'Whisper';
+}
+
+export function setFriendNickname(peerId, nickname) {
+  if (!peerId) return '';
+  const clean = String(nickname || '').trim().slice(0, 48);
+  if (!state.nicknames) state.nicknames = {};
+  if (clean) state.nicknames[peerId] = clean;
+  else delete state.nicknames[peerId];
+  try {
+    localStorage.setItem('whisper-nicknames-v1', JSON.stringify(state.nicknames));
+  } catch {
+    // ignore quota errors
+  }
+  return clean;
+}
+
+export function getEffectiveChatTheme(chatId) {
+  const perChat = chatId ? state.chatThemesById?.[chatId] : null;
+  if (perChat && typeof perChat === 'object') {
+    const merged = { ...DEFAULT_CHAT_THEME, ...perChat };
+    if (merged.mineBg && !merged.mineText) merged.mineText = computeContrastText(merged.mineBg);
+    if (merged.theirsBg && !merged.theirsText) merged.theirsText = computeContrastText(merged.theirsBg);
+    merged.bgDim = Math.max(0, Math.min(0.75, Number(merged.bgDim) || 0));
+    return merged;
+  }
+  return state.chatTheme || { ...DEFAULT_CHAT_THEME };
+}
+
+export function setPerChatTheme(chatId, patch) {
+  if (!chatId) return setChatTheme(patch);
+  const current = state.chatThemesById?.[chatId] || { ...state.chatTheme };
+  const next = { ...DEFAULT_CHAT_THEME, ...current, ...patch };
+  if ('mineBg' in patch && !('mineText' in patch)) {
+    next.mineText = next.mineBg ? computeContrastText(next.mineBg) : '';
+  }
+  if ('theirsBg' in patch && !('theirsText' in patch)) {
+    next.theirsText = next.theirsBg ? computeContrastText(next.theirsBg) : '';
+  }
+  next.bgDim = Math.max(0, Math.min(0.75, Number(next.bgDim) || 0));
+  if (!state.chatThemesById) state.chatThemesById = {};
+  state.chatThemesById[chatId] = next;
+  try {
+    localStorage.setItem('whisper-chat-themes-v1', JSON.stringify(state.chatThemesById));
+  } catch {
+    // quota fallback
+  }
+  return next;
+}
+
+export function resetPerChatTheme(chatId) {
+  if (!chatId) return resetChatTheme();
+  if (state.chatThemesById) delete state.chatThemesById[chatId];
+  try {
+    localStorage.setItem('whisper-chat-themes-v1', JSON.stringify(state.chatThemesById || {}));
+  } catch {
+    // ignore
+  }
+  return getEffectiveChatTheme(null);
+}
+
+export function getChatDraft(chatId) {
+  return chatId ? String(state.drafts?.[chatId] || '') : '';
+}
+
+export function setChatDraft(chatId, text) {
+  if (!chatId) return;
+  const val = String(text || '');
+  if (!state.drafts) state.drafts = {};
+  if (val.trim()) state.drafts[chatId] = val;
+  else delete state.drafts[chatId];
+  try {
+    localStorage.setItem('whisper-drafts-v1', JSON.stringify(state.drafts));
+  } catch {
+    // ignore
+  }
+}
 
 export function setChatTheme(patch) {
   const next = { ...state.chatTheme, ...patch };

@@ -15,6 +15,131 @@ const reply = (body: unknown, status = 200) =>
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+type ServiceAccount = {
+  project_id: string;
+  client_email: string;
+  private_key: string;
+};
+
+let cachedSaToken: { token: string; expiresAt: number } | null = null;
+
+function base64UrlEncode(input: Uint8Array | string): string {
+  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function pemToArrayBuffer(pem: string): ArrayBuffer {
+  const clean = pem
+    .replace(/-----BEGIN [A-Z0-9 ]+-----/g, "")
+    .replace(/-----END [A-Z0-9 ]+-----/g, "")
+    .replace(/\s+/g, "");
+  const bin = atob(clean);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function getServiceAccount(): ServiceAccount | null {
+  const raw = Deno.env.get("FIREBASE_SERVICE_ACCOUNT_JSON");
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<ServiceAccount>;
+    if (parsed.project_id && parsed.client_email && parsed.private_key) {
+      return {
+        project_id: parsed.project_id,
+        client_email: parsed.client_email,
+        private_key: parsed.private_key,
+      };
+    }
+  } catch {
+    // Ignore malformed secret
+  }
+  return null;
+}
+
+async function getFcmAccessToken(sa: ServiceAccount): Promise<string> {
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (cachedSaToken && cachedSaToken.expiresAt - nowSec > 120) {
+    return cachedSaToken.token;
+  }
+
+  const header = base64UrlEncode(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const claim = base64UrlEncode(JSON.stringify({
+    iss: sa.client_email,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: nowSec,
+    exp: nowSec + 3600,
+  }));
+  const signingInput = `${header}.${claim}`;
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    pemToArrayBuffer(sa.private_key),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sigBuf = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    key,
+    new TextEncoder().encode(signingInput),
+  );
+  const jwt = `${signingInput}.${base64UrlEncode(new Uint8Array(sigBuf))}`;
+
+  const tokenResp = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+    }),
+  });
+  const tokenJson = await tokenResp.json().catch(() => ({})) as {
+    access_token?: string;
+    expires_in?: number;
+  };
+  if (!tokenResp.ok || !tokenJson.access_token) {
+    throw new Error("Could not mint FCM OAuth access token");
+  }
+  cachedSaToken = {
+    token: tokenJson.access_token,
+    expiresAt: nowSec + Number(tokenJson.expires_in || 3600),
+  };
+  return cachedSaToken.token;
+}
+
+async function sendFcmDataMessage(
+  sa: ServiceAccount,
+  fcmToken: string,
+  dataPayload: Record<string, string>,
+): Promise<{ ok: boolean; remove?: boolean }> {
+  const accessToken = await getFcmAccessToken(sa);
+  const url = `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(sa.project_id)}/messages:send`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      message: {
+        token: fcmToken,
+        android: {
+          priority: "HIGH",
+          ttl: dataPayload.type === "call" ? "45s" : "86400s",
+        },
+        data: dataPayload,
+      },
+    }),
+  });
+  if (resp.ok) return { ok: true };
+  const errText = await resp.text().catch(() => "");
+  const remove = resp.status === 404 || errText.includes("UNREGISTERED");
+  return { ok: false, remove };
+}
+
 async function getOrCreateVapidKeys(admin: ReturnType<typeof createClient>) {
   const { data: existing } = await admin
     .from("vapid_keyring")
@@ -101,12 +226,40 @@ Deno.serve(async (request) => {
     return reply({ unsubscribed: true });
   }
 
+  if (action === "subscribe_fcm") {
+    const fcmToken = String(body.token || "").trim();
+    if (!fcmToken || fcmToken.length < 16) {
+      return reply({ error: "Valid FCM token required." }, 400);
+    }
+    const endpoint = `fcm:${fcmToken}`;
+    const { error } = await admin
+      .from("push_subscriptions")
+      .upsert(
+        {
+          user_id: user.id,
+          endpoint,
+          subscription: { type: "fcm", token: fcmToken, platform: "android" },
+        },
+        { onConflict: "endpoint" },
+      );
+    if (error) return reply({ error: error.message }, 500);
+    return reply({ subscribed: true, platform: "android" });
+  }
+
+  if (action === "unsubscribe_fcm") {
+    const fcmToken = String(body.token || "").trim();
+    if (!fcmToken) return reply({ error: "Token required." }, 400);
+    await admin.from("push_subscriptions").delete().eq("user_id", user.id).eq("endpoint", `fcm:${fcmToken}`);
+    return reply({ unsubscribed: true });
+  }
+
   if (action === "notify") {
     const conversationId = String(body.conversationId || "");
     const targetUserId = String(body.targetUserId || "");
     const title = String(body.title || "Whisper").slice(0, 80);
     const msgBody = String(body.body || "You have a new notification.").slice(0, 200);
     const tag = String(body.tag || "whisper").slice(0, 64);
+    const kind = String(body.kind || (tag.startsWith("whisper-call") ? "call" : "message"));
 
     let recipientIds: string[] = [];
 
@@ -119,7 +272,7 @@ Deno.serve(async (request) => {
       const isMember = (members || []).some((m) => m.user_id === user.id);
       if (!isMember) return reply({ error: "Not a conversation member." }, 403);
       recipientIds = (members || [])
-        .filter((m) => m.user_id !== user.id && !m.is_muted)
+        .filter((m) => m.user_id !== user.id && (kind === "call" || !m.is_muted))
         .map((m) => m.user_id);
     } else if (UUID_RE.test(targetUserId)) {
       recipientIds = [targetUserId];
@@ -144,12 +297,16 @@ Deno.serve(async (request) => {
     );
 
     let senderIcon = "";
+    let senderDisplay = title;
     const { data: senderProfile } = await admin
       .from("profiles")
-      .select("avatar_path")
+      .select("display_name,username,avatar_path")
       .eq("id", user.id)
       .maybeSingle();
 
+    if (senderProfile?.display_name || senderProfile?.username) {
+      senderDisplay = senderProfile.display_name || senderProfile.username || title;
+    }
     if (senderProfile?.avatar_path) {
       const { data: signed } = await admin.storage
         .from("profile-avatars")
@@ -163,14 +320,39 @@ Deno.serve(async (request) => {
       title,
       body: msgBody,
       tag,
+      kind,
       icon: senderIcon,
       conversationId: chatIdParam,
       url: targetUrl,
     });
+    const sa = getServiceAccount();
     let sent = 0;
 
     await Promise.all(
       subs.map(async (row) => {
+        const subObj = row.subscription as { type?: string; token?: string } | null;
+        if (subObj?.type === "fcm" && subObj?.token) {
+          if (!sa) return;
+          try {
+            const res = await sendFcmDataMessage(sa, subObj.token, {
+              type: kind,
+              conversationId: chatIdParam,
+              title,
+              senderName: senderDisplay,
+              body: msgBody,
+              icon: senderIcon,
+              tag,
+              sentAt: String(Date.now()),
+            });
+            if (res.ok) sent++;
+            else if (res.remove) {
+              await admin.from("push_subscriptions").delete().eq("id", row.id);
+            }
+          } catch {
+            // Keep going for other subscriptions
+          }
+          return;
+        }
         try {
           await webpush.sendNotification(row.subscription, payload);
           sent++;

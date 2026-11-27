@@ -44,10 +44,14 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.lifecycle.lifecycleScope
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.firebase.FirebaseApp
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
@@ -90,6 +94,11 @@ class MainActivity : AppCompatActivity() {
 
         @Volatile
         var isAppInForeground: Boolean = false
+
+        private val http = OkHttpClient.Builder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
+            .build()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -310,6 +319,8 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl(initialUrl)
         WhisperSyncService.syncState(this)
         WhisperSyncWorker.schedule(this)
+        pendingChatFromIntent?.let { if (it.isNotBlank()) NotificationHelper.clearIncomingCall(this, it) }
+        syncFcmIfConfigured()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -317,6 +328,7 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         val chatId = extractChatId(intent)
         if (!chatId.isNullOrBlank()) {
+            NotificationHelper.clearIncomingCall(this, chatId)
             openChatInWeb(chatId)
         }
         val shared = extractSharedText(intent)
@@ -412,6 +424,19 @@ class MainActivity : AppCompatActivity() {
                     REQ_POST_NOTIFICATIONS,
                 )
             }
+        }
+    }
+
+    private fun syncFcmIfConfigured() {
+        try {
+            if (FirebaseApp.getApps(this).isEmpty()) return
+            FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+                if (!token.isNullOrBlank()) {
+                    SessionStore.saveFcmToken(this, token)
+                    Thread { SessionStore.syncFcmTokenToServer(this, http, token) }.start()
+                }
+            }
+        } catch (_: Exception) {
         }
     }
 
@@ -602,6 +627,8 @@ class MainActivity : AppCompatActivity() {
             if (json.isNullOrBlank()) return
             SessionStore.saveFromJson(this@MainActivity, json)
             WhisperSyncService.syncState(this@MainActivity)
+            syncFcmIfConfigured()
+            Thread { SessionStore.syncFcmTokenToServer(this@MainActivity, http) }.start()
         }
 
         @JavascriptInterface
@@ -611,8 +638,21 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun clearSession() {
-            SessionStore.clear(this@MainActivity)
-            WhisperSyncService.syncState(this@MainActivity)
+            Thread {
+                SessionStore.unsubscribeFcmTokenFromServer(this@MainActivity, http)
+                SessionStore.clear(this@MainActivity)
+                WhisperSyncService.syncState(this@MainActivity)
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun showIncomingCallAlarm(conversationId: String?, title: String?, iconUrl: String?) {
+            NotificationHelper.showIncomingCallAlarm(
+                this@MainActivity,
+                conversationId ?: "",
+                title ?: "Whisper contact",
+                iconUrl ?: "",
+            )
         }
 
         @JavascriptInterface

@@ -331,3 +331,19 @@ export function nativeShareText(title, text) {
   }
   return false;
 }
+
+export function triggerNativeCallAlarm({ conversationId = '', title = 'Whisper contact', icon = '' } = {}) {
+  try {
+    if (isNativeAndroid() && typeof window.WhisperNative.showIncomingCallAlarm === 'function') {
+      window.WhisperNative.showIncomingCallAlarm(
+        String(conversationId || ''),
+        String(title || 'Whisper contact'),
+        String(icon || ''),
+      );
+      return true;
+    }
+  } catch {
+    // Ignore
+  }
+  return false;
+}

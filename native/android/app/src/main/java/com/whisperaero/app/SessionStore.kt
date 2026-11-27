@@ -35,6 +35,7 @@ object SessionStore {
     private const val KEY_CHATS = "chats_json"
     private const val KEY_BG_SYNC = "foreground_socket_enabled"
     private const val KEY_LAST_SEEN_ISO = "last_seen_iso"
+    private const val KEY_FCM_TOKEN = "fcm_token"
 
     private val lock = Any()
 
@@ -115,7 +116,63 @@ object SessionStore {
         synchronized(lock) {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val bg = prefs.getBoolean(KEY_BG_SYNC, false)
-            prefs.edit().clear().putBoolean(KEY_BG_SYNC, bg).apply()
+            val fcm = prefs.getString(KEY_FCM_TOKEN, "") ?: ""
+            prefs.edit().clear().putBoolean(KEY_BG_SYNC, bg).putString(KEY_FCM_TOKEN, fcm).apply()
+        }
+    }
+
+    fun saveFcmToken(context: Context, token: String) {
+        val clean = token.trim()
+        if (clean.isEmpty()) return
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_FCM_TOKEN, clean)
+            .apply()
+    }
+
+    fun getFcmToken(context: Context): String {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_FCM_TOKEN, "") ?: ""
+    }
+
+    fun syncFcmTokenToServer(context: Context, client: OkHttpClient, explicitToken: String? = null) {
+        val token = (explicitToken ?: getFcmToken(context)).trim()
+        if (token.length < 16) return
+        val session = refreshAccessTokenIfNeeded(context, client) ?: return
+        try {
+            val payload = JSONObject()
+                .put("action", "subscribe_fcm")
+                .put("token", token)
+                .put("platform", "android")
+                .toString()
+            val req = Request.Builder()
+                .url("${session.supabaseUrl}/functions/v1/push")
+                .addHeader("apikey", session.anonKey)
+                .addHeader("Authorization", "Bearer ${session.accessToken}")
+                .addHeader("Content-Type", "application/json")
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(req).execute().close()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun unsubscribeFcmTokenFromServer(context: Context, client: OkHttpClient) {
+        val token = getFcmToken(context).trim()
+        if (token.isEmpty()) return
+        val session = getSession(context) ?: return
+        try {
+            val payload = JSONObject()
+                .put("action", "unsubscribe_fcm")
+                .put("token", token)
+                .toString()
+            val req = Request.Builder()
+                .url("${session.supabaseUrl}/functions/v1/push")
+                .addHeader("apikey", session.anonKey)
+                .addHeader("Authorization", "Bearer ${session.accessToken}")
+                .addHeader("Content-Type", "application/json")
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(req).execute().close()
+        } catch (_: Exception) {
         }
     }
 

@@ -20,6 +20,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_REPLY = "com.whisperaero.app.ACTION_REPLY"
         const val ACTION_MARK_READ = "com.whisperaero.app.ACTION_MARK_READ"
+        const val ACTION_DISMISS_CALL = "com.whisperaero.app.ACTION_DISMISS_CALL"
 
         private val http = OkHttpClient()
         private val executor = Executors.newSingleThreadExecutor()
@@ -32,7 +33,11 @@ class NotificationActionReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        val convId = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_ID) ?: return
+        val convId = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_ID) ?: ""
+        if (intent.action == ACTION_DISMISS_CALL) {
+            NotificationHelper.clearIncomingCall(context, convId)
+            return
+        }
         if (convId.isBlank()) return
 
         val pendingResult = goAsync()
@@ -83,6 +88,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
 
         // Best-effort push notification trigger for peer's offline/browser devices
         val pushBody = JSONObject()
+            .put("action", "notify")
             .put("conversationId", convId)
             .put("title", "Whisper")
             .put("body", body)

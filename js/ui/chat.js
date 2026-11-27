@@ -7,12 +7,15 @@ import {
   nativeCopyText,
   nativeShareText,
   openNativeChatBubble,
-} from '../native.js?v=26';
+} from '../native.js?v=27';
 import {
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,
   getActiveChat,
   getChat,
+  getChatDraft,
+  getDisplayName,
+  setChatDraft,
   state,
 } from '../state.js';
 import {
@@ -25,12 +28,39 @@ import {
   formatLastSeen,
   formatTime,
   haptic,
+  linkifyEscapedText,
   openModal,
   popUiLayer,
   pushUiLayer,
   showToast,
 } from '../utils.js';
 import { openViewOnceMedia } from '../viewOnce.js';
+
+const MUTE_SVG = '<svg class="mute-svg-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Muted" title="Muted"><path d="M8.56 2.9A7 7 0 0 1 19 9v4m-2 4H2a3 3 0 0 0 2-2.8V9a7 7 0 0 1 .78-3.22"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="2" x2="22" y1="2" y2="22"/></svg>';
+
+export function isMessagesNearBottom(box = $('#messages'), threshold = 110) {
+  if (!box) return true;
+  return (box.scrollHeight - box.scrollTop - box.clientHeight) < threshold;
+}
+
+export function updateScrollBottomBtn() {
+  const btn = $('#scroll-bottom-btn');
+  const badge = $('#scroll-bottom-badge');
+  const box = $('#messages');
+  const c = getActiveChat();
+  if (!btn || !box || !c) {
+    btn?.classList.add('hidden');
+    return;
+  }
+  const distFromBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
+  const unread = Number(c.scrolledUnread || 0);
+  const show = distFromBottom > 150 || unread > 0;
+  btn.classList.toggle('hidden', !show);
+  if (badge) {
+    badge.textContent = unread > 99 ? '99+' : String(unread);
+    badge.classList.toggle('hidden', unread <= 0);
+  }
+}
 
 let callbacks = {
   onChatSelected: null,
@@ -44,8 +74,8 @@ export function initChatUI(handlers) {
 }
 
 function highlightMatch(text, term) {
+  if (!term) return linkifyEscapedText(text);
   const safe = esc(text);
-  if (!term) return safe;
   const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return safe.replace(new RegExp(`(${escaped})`, 'gi'), '<mark class="search-hit">$1</mark>');
 }
@@ -62,9 +92,10 @@ export function renderChats() {
 
   const q = state.query.trim().toLowerCase();
   const items = sorted.filter((c) => {
+    const displayName = getDisplayName(c);
     const matchesQuery =
       !q
-      || `${c.name} ${c.username} ${c.latestMessage?.text || ''}`.toLowerCase().includes(q);
+      || `${displayName} ${c.name} ${c.username} ${c.latestMessage?.text || ''}`.toLowerCase().includes(q);
     const matchesFilter =
       (state.filter === 'all')
       || (state.filter === 'unread' && c.unread > 0)
@@ -77,24 +108,28 @@ export function renderChats() {
         .map((c) => {
           const m = c.latestMessage;
           const online = state.onlineUsers.has(c.peerId);
-          const preview = m?.deletedAt
-            ? 'Message deleted'
-            : m?.file
-              ? `${m.file.isViewOnce ? '1× ' : '▣ '}${esc(m.file.name)}`
-              : esc(m?.text || 'Start a conversation');
+          const displayName = getDisplayName(c);
+          const draft = c.id !== state.activeChatId ? getChatDraft(c.id).trim() : '';
+          const preview = draft
+            ? `<span class="chat-draft-tag">Draft:</span> ${esc(draft)}`
+            : m?.deletedAt
+              ? 'Message deleted'
+              : m?.file
+                ? `${m.file.isViewOnce ? '1× ' : '▣ '}${esc(m.file.name)}`
+                : esc(m?.text || 'Start a conversation');
           return `
             <div class="chat-item ${c.id === state.activeChatId ? 'active' : ''}" data-chat="${esc(c.id)}">
               <div class="avatar-wrap">
-                ${avatarMarkup(c)}
+                ${avatarMarkup({ ...c, name: displayName })}
                 ${online ? '<span class="presence-dot" title="Online"></span>' : ''}
               </div>
               <div class="chat-main">
                 <div class="chat-row">
-                  <span class="chat-name">${esc(c.name)}</span>
+                  <span class="chat-name"><span class="chat-name-text">${esc(displayName)}</span>${c.muted ? MUTE_SVG : ''}</span>
                   <span class="chat-time">${esc(m?.time || '')}</span>
                 </div>
                 <div class="chat-row">
-                  <span class="chat-preview">${c.muted ? '🔇 ' : ''}${c.favorite ? '★ ' : ''}${preview}</span>
+                  <span class="chat-preview">${c.favorite ? '★ ' : ''}${preview}</span>
                   ${c.unread > 0 ? `<span class="unread-badge">${c.unread > 99 ? '99+' : c.unread}</span>` : ''}
                 </div>
               </div>
@@ -118,6 +153,7 @@ export function renderChats() {
 export function updatePeerHeader() {
   const c = getActiveChat();
   if (!c) return;
+  const displayName = getDisplayName(c);
   const peerAvatar = $('#peer-avatar');
   if (peerAvatar) {
     peerAvatar.textContent = c.avatar ? '' : c.initial;
@@ -127,7 +163,7 @@ export function updatePeerHeader() {
     peerAvatar.style.backgroundColor = c.color;
   }
   const online = state.onlineUsers.has(c.peerId);
-  $('#peer-name').textContent = c.name;
+  $('#peer-name').innerHTML = `<span class="peer-name-text">${esc(displayName)}</span>${c.muted ? MUTE_SVG : ''}`;
   $('#peer-status').innerHTML = `<i style="background:${online ? '#43b581' : '#94a1a5'}"></i> ${esc(formatLastSeen(c.lastSeenAt, online))}`;
 
   const detAvatar = $('#details-avatar');
@@ -138,7 +174,17 @@ export function updatePeerHeader() {
     detAvatar.style.backgroundPosition = 'center';
     detAvatar.style.backgroundColor = c.color;
   }
-  $('#details-name').textContent = c.name;
+  $('#details-name').textContent = displayName;
+  const nick = String(state.nicknames?.[c.peerId] || '').trim();
+  const realNameEl = $('#details-real-name');
+  if (realNameEl) {
+    realNameEl.textContent = nick ? `Name: ${c.name}` : '';
+    realNameEl.classList.toggle('hidden', !nick);
+  }
+  const nickValEl = $('#details-nickname-value');
+  if (nickValEl) {
+    nickValEl.textContent = nick || 'Not set';
+  }
   $('#details-handle').textContent = `@${c.username}`;
   $('.about-copy').textContent = c.about || 'Say hello and get to know each other.';
   $('#favorite-btn').innerHTML = c.favorite ? '★ &nbsp; In favorites' : '☆ &nbsp; Add to favorites';
@@ -171,15 +217,17 @@ export async function syncChatMessages(chatId, { reloadSharedMedia = false } = {
       c.sharedMedia = await api.loadSharedMedia(c.id).catch(() => c.sharedMedia || []);
     }
     if (state.activeChatId === c.id) {
+      const box = $('#messages');
+      const nearBottom = isMessagesNearBottom(box);
       const latestAt = c.messages.at(-1)?.createdAt || '';
       const hasUnreadLatest = Boolean(latestAt && (!c.lastReadAt || latestAt > c.lastReadAt));
-      if (document.visibilityState === 'visible' && (c.unread > 0 || hasUnreadLatest)) {
+      if (document.visibilityState === 'visible' && nearBottom && (c.unread > 0 || hasUnreadLatest)) {
         c.unread = 0;
         api.markConversationRead(c.id, state.user.id).then((ts) => {
           if (ts) c.lastReadAt = ts;
         });
       }
-      renderMessages();
+      renderMessages({ preserveScroll: !nearBottom });
       renderChats();
       if (reloadSharedMedia) renderSharedMedia();
     }
@@ -196,19 +244,32 @@ export async function selectChat(chatId, { forceSync = false, allowInBubble = fa
   if (!allowInBubble && isBubbleWindow() && isNativeAndroid()) {
     const currentBubbleId = getBubbleChatId();
     if (currentBubbleId && chatId !== currentBubbleId) {
-      const ok = openNativeChatBubble(c);
-      showToast(ok ? `Opened ${c.name} in a new bubble` : 'Enable Bubbles for Whisper in Android settings');
+      const ok = openNativeChatBubble({ ...c, name: getDisplayName(c) });
+      showToast(ok ? `Opened ${getDisplayName(c)} in a new bubble` : 'Enable Bubbles for Whisper in Android settings');
       return;
     }
   }
 
-  const changed = state.activeChatId !== chatId;
+  const prevChatId = state.activeChatId;
+  const changed = prevChatId !== chatId;
+  if (changed && prevChatId) {
+    setChatDraft(prevChatId, $('#message-input')?.value || '');
+  }
   state.activeChatId = chatId;
+  c.scrolledUnread = 0;
   if (changed) {
     clearComposeContext();
     clearPendingAttachment();
     closeChatSearch();
+    const input = $('#message-input');
+    if (input) {
+      input.value = getChatDraft(chatId);
+      input.style.height = 'auto';
+      input.style.height = `${Math.min(110, input.scrollHeight)}px`;
+    }
   }
+
+  callbacks.onChatSelected?.(c.id);
 
   const wasMobileOpen = $('#conversation').classList.contains('mobile-open');
   $('#empty-state').classList.add('hidden');
@@ -258,6 +319,8 @@ export async function selectChat(chatId, { forceSync = false, allowInBubble = fa
     await syncChatMessages(c.id, { reloadSharedMedia: true });
   }
 
+  const wasUnread = c.unread > 0;
+  const lastReadAtBefore = c.lastReadAt || '';
   if (c.unread > 0) {
     c.unread = 0;
     api.markConversationRead(c.id, state.user.id).then((ts) => {
@@ -265,10 +328,16 @@ export async function selectChat(chatId, { forceSync = false, allowInBubble = fa
     });
     renderChats();
   }
+  c.firstUnreadMsgId = '';
+  if (wasUnread && c.messages?.length) {
+    const firstUnread = c.messages.find(
+      (m) => m.from === 'them' && !m.deletedAt && (!lastReadAtBefore || m.createdAt > lastReadAtBefore),
+    );
+    if (firstUnread) c.firstUnreadMsgId = firstUnread.id;
+  }
 
-  renderMessages();
+  renderMessages({ forceBottom: true });
   renderSharedMedia();
-  callbacks.onChatSelected?.(c.id);
 }
 
 export function renderSharedMedia() {
@@ -356,7 +425,7 @@ function startReplyTo(msg, chat) {
   state.editingMessage = null;
   state.replyingTo = {
     id: msg.id,
-    senderName: msg.from === 'me' ? 'You' : chat.name,
+    senderName: msg.from === 'me' ? 'You' : getDisplayName(chat),
     text: msg.text || msg.file?.name || 'Attachment',
   };
   renderComposeContext();
@@ -553,11 +622,12 @@ function isSameCluster(a, b) {
   return diff <= 3 * 60 * 1000;
 }
 
-export function renderMessages({ preserveScroll = false } = {}) {
+export function renderMessages({ preserveScroll = false, forceBottom = false } = {}) {
   const c = getActiveChat();
   const box = $('#messages');
   if (!c || !box) return;
 
+  const wasNearBottom = isMessagesNearBottom(box);
   const prevHeight = box.scrollHeight;
   const prevTop = box.scrollTop;
   const searchTerm = state.chatSearch.open ? state.chatSearch.term.trim() : '';
@@ -573,8 +643,12 @@ export function renderMessages({ preserveScroll = false } = {}) {
     chunks.push('<div class="people-empty">No messages yet. Say hello!</div>');
   }
 
+  const peerDisplayName = getDisplayName(c);
   for (let i = 0; i < c.messages.length; i++) {
     const m = c.messages[i];
+    if (c.firstUnreadMsgId && m.id === c.firstUnreadMsgId) {
+      chunks.push('<div class="unread-divider" id="unread-divider"><span>Unread messages</span></div>');
+    }
     const dk = dayKey(m.createdAt);
     if (dk && dk !== lastDay) {
       lastDay = dk;
@@ -593,7 +667,7 @@ export function renderMessages({ preserveScroll = false } = {}) {
       bodyHtml = '<div class="message-bubble deleted-bubble">This message was deleted</div>';
     } else {
       const replyHtml = m.replyPreview
-        ? `<button type="button" class="reply-quote" data-jump-msg="${esc(m.replyPreview.id)}"><strong>${esc(m.replyPreview.senderId === state.user.id ? 'You' : c.name)}</strong><span>${esc(m.replyPreview.text)}</span></button>`
+        ? `<button type="button" class="reply-quote" data-jump-msg="${esc(m.replyPreview.id)}"><strong>${esc(m.replyPreview.senderId === state.user.id ? 'You' : peerDisplayName)}</strong><span>${esc(m.replyPreview.text)}</span></button>`
         : '';
 
       let mediaHtml = '';
@@ -722,7 +796,15 @@ export function renderMessages({ preserveScroll = false } = {}) {
   box.querySelectorAll('[data-jump-msg]').forEach((btn) => {
     btn.onclick = () => {
       const target = box.querySelector(`[data-msg-id="${CSS.escape(btn.dataset.jumpMsg)}"]`);
-      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (!target) {
+        showToast('Original message is further up — load older messages to jump');
+        return;
+      }
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.classList.remove('msg-jump-highlight');
+      void target.offsetWidth;
+      target.classList.add('msg-jump-highlight');
+      setTimeout(() => target.classList.remove('msg-jump-highlight'), 1600);
     };
   });
 
@@ -891,11 +973,16 @@ export function renderMessages({ preserveScroll = false } = {}) {
     };
   }
 
-  if (preserveScroll) {
+  if (forceBottom) {
+    box.scrollTop = box.scrollHeight;
+    c.scrolledUnread = 0;
+  } else if (preserveScroll || !wasNearBottom) {
     box.scrollTop = prevTop + (box.scrollHeight - prevHeight);
   } else {
     box.scrollTop = box.scrollHeight;
+    c.scrolledUnread = 0;
   }
+  updateScrollBottomBtn();
 }
 
 export function renderComposeContext() {

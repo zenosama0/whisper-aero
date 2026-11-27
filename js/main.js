@@ -1,6 +1,6 @@
 import { config, configured, supabase } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=26';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=27';
 import {
   clearNativeSession,
   getNativeStoredSession,
@@ -13,15 +13,26 @@ import {
   startNativeGoogleSignIn,
   syncNativeSession,
   syncNativeTheme,
-} from './native.js?v=26';
+  triggerNativeCallAlarm,
+} from './native.js?v=27';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
-import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
+import {
+  getActiveChat,
+  getChat,
+  getDisplayName,
+  getEffectiveChatTheme,
+  resetState,
+  setChatDraft,
+  state,
+  upsertMessage,
+} from './state.js';
 import {
   clearComposeContext,
   clearPendingAttachment,
   closeChatSearch,
   closeMessageMenu,
   initChatUI,
+  isMessagesNearBottom,
   openChatSearch,
   renderAttachmentPreview,
   renderChats,
@@ -32,6 +43,7 @@ import {
   stepChatSearch,
   syncChatMessages,
   updatePeerHeader,
+  updateScrollBottomBtn,
   updateTypingBanner,
 } from './ui/chat.js';
 import {
@@ -39,6 +51,8 @@ import {
   closeWorkspacePanel,
   getActiveWorkspacePanel,
   openAvatarLightbox,
+  openChatThemeModal,
+  openNicknameModal,
   openPeoplePage,
   openProfileModal,
   openRequestsPage,
@@ -58,6 +72,8 @@ import {
   popUiLayer,
   pushUiLayer,
   showToast,
+  startCallRingtone,
+  stopCallRingtone,
 } from './utils.js';
 
 let authMode = 'login';
@@ -87,7 +103,7 @@ function hideBootSplash() {
 const MOON_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/></svg>';
 const SUN_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>';
 
-function applyChatTheme(theme = state.chatTheme) {
+function applyChatTheme(theme = getEffectiveChatTheme(state.activeChatId)) {
   const rootStyle = document.documentElement.style;
   const t = theme || {};
   rootStyle.setProperty('--custom-mine-bg', t.mineBg || '');
@@ -159,6 +175,10 @@ function openChatMoreMenu(anchorEl) {
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
       <span>Chat theme</span>
     </button>
+    <button type="button" data-chat-more="nickname" role="menuitem">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+      <span>Set nickname</span>
+    </button>
     <button type="button" data-chat-more="profile" role="menuitem">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
       <span>View profile</span>
@@ -218,14 +238,16 @@ function openChatMoreMenu(anchorEl) {
       } else if (action === 'mute') {
         const nextMuted = !c.muted;
         c.muted = nextMuted;
+        updatePeerHeader();
         renderChats();
         pushNativeSession();
-        showToast(nextMuted ? `Muted ${c.name}` : `Unmuted ${c.name}`);
+        showToast(nextMuted ? `Muted ${getDisplayName(c)}` : `Unmuted ${getDisplayName(c)}`);
         restoreKeyboardIfNeeded();
         try {
           await api.setConversationMuted(c.id, state.user.id, nextMuted);
         } catch (error) {
           c.muted = !nextMuted;
+          updatePeerHeader();
           renderChats();
           pushNativeSession();
           showToast(error.message || 'Could not update mute setting');
@@ -235,7 +257,7 @@ function openChatMoreMenu(anchorEl) {
         c.favorite = nextFav;
         updatePeerHeader();
         renderChats();
-        showToast(nextFav ? `Added ${c.name} to favorites` : `Removed ${c.name} from favorites`);
+        showToast(nextFav ? `Added ${getDisplayName(c)} to favorites` : `Removed ${getDisplayName(c)} from favorites`);
         restoreKeyboardIfNeeded();
         try {
           await api.setConversationFavorite(c.id, state.user.id, nextFav);
@@ -247,16 +269,17 @@ function openChatMoreMenu(anchorEl) {
         }
       } else if (action === 'search') {
         openChatSearch();
+        $('#chat-search-btn')?.classList.add('is-active');
         if (window.innerWidth <= 700) pushUiLayer('search');
       } else if (action === 'theme') {
-        openSettingsPage({
-          onThemeChange: setTheme,
-          onChatThemeChange: () => applyChatTheme(),
-          onSignOut: handleSignOut,
+        openChatThemeModal(c, () => applyChatTheme());
+      } else if (action === 'nickname') {
+        openNicknameModal(c, () => {
+          updatePeerHeader();
+          renderChats();
+          renderMessages({ preserveScroll: true });
+          pushNativeSession();
         });
-        setTimeout(() => {
-          document.getElementById('chat-theme-preview')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 60);
       } else if (action === 'profile') {
         openDetailsPanel();
       }
@@ -274,6 +297,8 @@ function openDetailsPanel() {
   details.classList.remove('hidden');
   if (window.innerWidth <= 1050) {
     $('#details-backdrop')?.classList.remove('hidden');
+    details.classList.add('sheet-enter');
+    setTimeout(() => details.classList.remove('sheet-enter'), 240);
     pushUiLayer('details');
   }
 }
@@ -282,6 +307,7 @@ function closeDetailsPanel(fromPop = false) {
   const details = $('#details');
   if (!details || details.classList.contains('hidden')) return;
   details.classList.add('hidden');
+  details.classList.remove('sheet-enter');
   details.style.transform = '';
   details.style.transition = '';
   const bd = $('#details-backdrop');
@@ -415,7 +441,7 @@ async function pushNativeSession(providedSession = null) {
       chats: state.chats.map((c) => ({
         id: c.id,
         peerId: c.peerId || '',
-        name: c.name || 'Whisper',
+        name: getDisplayName(c),
         avatar: c.avatar || '',
         avatarPath: c.avatarPath || '',
         muted: Boolean(c.muted),
@@ -556,7 +582,16 @@ async function handleMessageRealtime(payload) {
     }
 
     if (msg.from === 'them') {
-      if (state.activeChatId === chat.id && document.visibilityState === 'visible') {
+      const box = $('#messages');
+      const nearBottom = state.activeChatId === chat.id && isMessagesNearBottom(box);
+      if (state.activeChatId === chat.id && document.visibilityState === 'visible' && nearBottom) {
+        chat.unread = 0;
+        chat.scrolledUnread = 0;
+        api.markConversationRead(chat.id, state.user.id).then((ts) => {
+          if (ts) chat.lastReadAt = ts;
+        });
+      } else if (state.activeChatId === chat.id && document.visibilityState === 'visible') {
+        chat.scrolledUnread = (chat.scrolledUnread || 0) + 1;
         chat.unread = 0;
         api.markConversationRead(chat.id, state.user.id).then((ts) => {
           if (ts) chat.lastReadAt = ts;
@@ -567,16 +602,17 @@ async function handleMessageRealtime(payload) {
           playNotificationChime(state.soundEnabled, 'message');
           if (document.visibilityState === 'hidden') {
             const preview = msg.file ? `Sent ${msg.file.name}` : msg.text;
+            const peerLabel = getDisplayName(chat);
             const handledNative = sendNativeNotification({
               conversationId: chat.id,
-              title: chat.name,
+              title: peerLabel,
               body: preview,
               icon: chat.avatar || '',
               tag: `whisper-msg-${chat.id}`,
               messageId: msg.id,
             });
             if (!handledNative && 'Notification' in window && Notification.permission === 'granted') {
-              new Notification(chat.name, {
+              new Notification(peerLabel, {
                 body: preview,
                 icon: chat.avatar || './icon-192.png',
                 tag: `whisper-msg-${chat.id}`,
@@ -589,7 +625,11 @@ async function handleMessageRealtime(payload) {
 
     renderChats();
     if (state.activeChatId === chat.id) {
-      renderMessages();
+      const nearBottom = isMessagesNearBottom($('#messages'));
+      renderMessages({
+        forceBottom: msg.from === 'me',
+        preserveScroll: msg.from !== 'me' && !nearBottom,
+      });
       renderSharedMedia();
     }
   } else if (payload.eventType === 'UPDATE') {
@@ -671,28 +711,70 @@ async function handleRequestRealtime(payload) {
   await refreshInbox();
 }
 
+let incomingCallBannerEl = null;
+let incomingCallTimer = 0;
+
+function dismissIncomingCallBanner() {
+  stopCallRingtone();
+  clearTimeout(incomingCallTimer);
+  incomingCallTimer = 0;
+  incomingCallBannerEl?.remove();
+  incomingCallBannerEl = null;
+}
+
+function showIncomingCallBanner(chat) {
+  dismissIncomingCallBanner();
+  const label = chat ? getDisplayName(chat) : 'A contact';
+  const banner = document.createElement('div');
+  banner.className = 'incoming-call-banner';
+  banner.setAttribute('role', 'alertdialog');
+  banner.innerHTML = `
+    <div class="incoming-call-pulse" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+    </div>
+    <div class="incoming-call-copy">
+      <strong>${esc(label)} is calling</strong>
+      <small>Tap Open Chat or Dismiss</small>
+    </div>
+    <div class="incoming-call-actions">
+      <button type="button" class="secondary-btn incoming-call-dismiss">Dismiss</button>
+      ${chat ? '<button type="button" class="primary-btn incoming-call-open">Open</button>' : ''}
+    </div>
+  `;
+  document.body.append(banner);
+  incomingCallBannerEl = banner;
+
+  banner.querySelector('.incoming-call-dismiss')?.addEventListener('click', dismissIncomingCallBanner);
+  banner.querySelector('.incoming-call-open')?.addEventListener('click', async () => {
+    const cid = chat?.id;
+    dismissIncomingCallBanner();
+    if (cid) await selectChat(cid, { allowInBubble: true });
+  });
+
+  startCallRingtone();
+  incomingCallTimer = setTimeout(dismissIncomingCallBanner, 40000);
+}
+
 function handleCallInviteRealtime(payload) {
   if (payload.new?.caller_id === state.user.id) return;
   const chat = getChat(payload.new?.conversation_id);
-  showToast(`${chat?.name || 'Your contact'} is calling`);
-  playNotificationChime(state.soundEnabled, 'call');
+  const label = chat ? getDisplayName(chat) : 'A contact';
   if (document.visibilityState === 'hidden') {
-    const handledNative = sendNativeNotification({
+    const handledNative = triggerNativeCallAlarm({
       conversationId: chat?.id || '',
-      title: 'Incoming call notification',
-      body: `${chat?.name || 'A contact'} is trying to reach you.`,
+      title: label,
       icon: chat?.avatar || '',
-      tag: chat?.id ? `whisper-call-${chat.id}` : 'whisper-call',
     });
     if (!handledNative && 'Notification' in window && Notification.permission === 'granted') {
-      new Notification('Incoming call notification', {
-        body: `${chat?.name || 'A contact'} is trying to reach you.`,
+      new Notification(`${label} is calling`, {
+        body: 'Incoming Whisper call alert — tap to open chat.',
         icon: chat?.avatar || './icon-192.png',
         tag: 'whisper-call',
+        requireInteraction: true,
       });
     }
   }
-  if (navigator.vibrate) navigator.vibrate([180, 80, 180]);
+  showIncomingCallBanner(chat);
 }
 
 function handleRemoteTyping(conversationId, _peerId, isTyping) {
@@ -803,6 +885,8 @@ async function handleSendText() {
 
   const replyTo = state.replyingTo;
   clearComposeContext();
+  setChatDraft(c.id, '');
+  renderChats();
   input.value = '';
   input.style.height = 'auto';
   input.focus({ preventScroll: true });
@@ -900,6 +984,7 @@ async function handleSendText() {
 function wireEvents() {
   initChatUI({
     onChatSelected: (convId) => {
+      applyChatTheme(getEffectiveChatTheme(convId));
       joinConversationTyping(convId, state.user.id, handleRemoteTyping);
       if (pendingSharedText) {
         const input = $('#message-input');
@@ -907,6 +992,7 @@ function wireEvents() {
           input.value = input.value ? `${input.value}\n${pendingSharedText}` : pendingSharedText;
           input.style.height = 'auto';
           input.style.height = `${Math.min(110, input.scrollHeight)}px`;
+          setChatDraft(convId, input.value);
         }
         pendingSharedText = '';
       }
@@ -1239,7 +1325,10 @@ function wireEvents() {
     el.style.height = 'auto';
     el.style.height = `${Math.min(110, el.scrollHeight)}px`;
     const c = getActiveChat();
-    if (c && el.value.trim()) sendTypingSignal(c.id, state.user.id, true);
+    if (c) {
+      setChatDraft(c.id, el.value);
+      if (el.value.trim()) sendTypingSignal(c.id, state.user.id, true);
+    }
   });
 
   $('#message-input').addEventListener('paste', (e) => {
@@ -1404,7 +1493,10 @@ function wireEvents() {
         conv.style.top = `${Math.round(vv.offsetTop)}px`;
         conv.style.bottom = 'auto';
         const box = $('#messages');
-        if (box) box.scrollTop = box.scrollHeight;
+        if (box && isMessagesNearBottom(box, 160)) {
+          box.scrollTop = box.scrollHeight;
+        }
+        updateScrollBottomBtn();
       } else {
         conv.style.height = '';
         conv.style.top = '';
@@ -1459,6 +1551,48 @@ function wireEvents() {
     if (c) openAvatarLightbox(c);
   });
 
+  const leaveMobileConversation = () => {
+    const prevId = state.activeChatId;
+    if (prevId) setChatDraft(prevId, $('#message-input')?.value || '');
+    pendingChatId = '';
+    $('#conversation')?.classList.remove('mobile-open');
+    if (window.innerWidth <= 700 || isBubbleWindow()) {
+      state.activeChatId = null;
+      applyChatTheme();
+      renderChats();
+    }
+  };
+
+  $('#messages')?.addEventListener('scroll', () => {
+    const c = getActiveChat();
+    const box = $('#messages');
+    if (c && box && isMessagesNearBottom(box, 65)) {
+      c.scrolledUnread = 0;
+    }
+    updateScrollBottomBtn();
+  }, { passive: true });
+
+  $('#scroll-bottom-btn')?.addEventListener('pointerdown', (e) => e.preventDefault());
+  $('#scroll-bottom-btn')?.addEventListener('mousedown', (e) => e.preventDefault());
+  $('#scroll-bottom-btn')?.addEventListener('click', () => {
+    const box = $('#messages');
+    const c = getActiveChat();
+    if (c) c.scrolledUnread = 0;
+    if (box) box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+    updateScrollBottomBtn();
+  });
+
+  $('#details-nickname-btn')?.addEventListener('click', () => {
+    const c = getActiveChat();
+    if (!c) return;
+    openNicknameModal(c, () => {
+      updatePeerHeader();
+      renderChats();
+      renderMessages({ preserveScroll: true });
+      pushNativeSession();
+    });
+  });
+
   $('#back-btn').onclick = () => {
     let popCount = 0;
     if (document.querySelector('.chat-more-backdrop')) {
@@ -1475,10 +1609,11 @@ function wireEvents() {
     }
     if (state.chatSearch.open) {
       closeChatSearch();
+      $('#chat-search-btn')?.classList.remove('is-active');
       if (window.innerWidth <= 700) popCount++;
     }
     if ($('#conversation').classList.contains('mobile-open')) {
-      $('#conversation').classList.remove('mobile-open');
+      leaveMobileConversation();
       if (window.innerWidth <= 700) popCount++;
     }
     if (popCount > 0) popUiLayer(popCount);
@@ -1506,12 +1641,13 @@ function wireEvents() {
     moreBtn.addEventListener('click', toggleMore);
   }
 
-  // Swipe down to collapse bottom profile sheet on mobile / tablet
+  // Swipe down to collapse bottom profile sheet smoothly without teleporting
   const detailsDrawer = $('#details');
   if (detailsDrawer) {
     let dStartX = 0;
     let dStartY = 0;
-    let dStartAt = 0;
+    let dDragOriginY = 0;
+    let dDragStartAt = 0;
     let dDragging = false;
     let dDelta = 0;
 
@@ -1519,29 +1655,36 @@ function wireEvents() {
       if (window.innerWidth > 1050 || detailsDrawer.classList.contains('hidden') || e.touches.length !== 1) return;
       dStartX = e.touches[0].clientX;
       dStartY = e.touches[0].clientY;
-      dStartAt = Date.now();
+      dDragOriginY = dStartY;
+      dDragStartAt = Date.now();
       dDragging = false;
       dDelta = 0;
+      detailsDrawer.classList.remove('sheet-enter');
       detailsDrawer.style.transition = 'none';
     }, { passive: true });
 
     detailsDrawer.addEventListener('touchmove', (e) => {
       if (window.innerWidth > 1050 || detailsDrawer.classList.contains('hidden') || e.touches.length !== 1) return;
-      const dx = e.touches[0].clientX - dStartX;
-      const dy = e.touches[0].clientY - dStartY;
-      if (!dDragging && detailsDrawer.scrollTop <= 0 && dy > 12 && dy > Math.abs(dx) * 1.2) {
+      const curX = e.touches[0].clientX;
+      const curY = e.touches[0].clientY;
+      const dx = curX - dStartX;
+      const dy = curY - dStartY;
+      if (!dDragging && detailsDrawer.scrollTop <= 0 && dy > 10 && dy > Math.abs(dx) * 1.25) {
         dDragging = true;
+        dDragOriginY = curY;
+        dDragStartAt = Date.now();
       }
       if (dDragging) {
-        dDelta = Math.max(0, dy);
+        if (e.cancelable) e.preventDefault();
+        dDelta = Math.max(0, curY - dDragOriginY);
         detailsDrawer.style.transform = `translateY(${dDelta}px)`;
         const bd = $('#details-backdrop');
         if (bd) {
-          const h = Math.max(240, detailsDrawer.offsetHeight || 420);
+          const h = Math.max(260, detailsDrawer.offsetHeight || 420);
           bd.style.opacity = String(Math.max(0, 1 - dDelta / h));
         }
       }
-    }, { passive: true });
+    }, { passive: false });
 
     const endDrawerDrag = () => {
       if (!dDragging) {
@@ -1549,13 +1692,14 @@ function wireEvents() {
         return;
       }
       dDragging = false;
-      const elapsed = Date.now() - dStartAt;
-      if (dDelta > 72 || (dDelta > 34 && elapsed < 220)) {
+      const elapsed = Math.max(16, Date.now() - dDragStartAt);
+      const velocity = dDelta / elapsed;
+      if (dDelta > 110 || (dDelta > 56 && velocity > 0.65)) {
         detailsDrawer.style.transition = 'transform 0.16s ease-out';
         detailsDrawer.style.transform = 'translateY(100%)';
         setTimeout(() => closeDetailsPanel(), 150);
       } else {
-        detailsDrawer.style.transition = 'transform 0.18s ease-out';
+        detailsDrawer.style.transition = 'transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)';
         detailsDrawer.style.transform = '';
         const bd = $('#details-backdrop');
         if (bd) bd.style.opacity = '';
@@ -1615,34 +1759,65 @@ function wireEvents() {
       await api.createCallInvite(c.id);
       api.triggerPushNotification({
         conversationId: c.id,
-        title: 'Incoming call',
+        title: state.user.name || state.user.username,
         body: `${state.user.name || state.user.username} is calling on Whisper`,
         tag: `whisper-call-${c.id}`,
+        kind: 'call',
       });
-      showToast(`Call notification sent to ${c.name}`);
+      showToast(`Ringing ${getDisplayName(c)}…`);
     } catch (error) {
       showToast(error.message || 'Call notification could not be sent');
     }
   };
 
-  $('#chat-search-btn').onclick = () => {
-    if (state.chatSearch.open) {
-      closeChatSearch();
-      if (window.innerWidth <= 700) popUiLayer();
-    } else {
-      openChatSearch();
-      if (window.innerWidth <= 700) pushUiLayer('search');
-    }
-  };
+  const searchBtn = $('#chat-search-btn');
+  if (searchBtn) {
+    searchBtn.addEventListener('pointerdown', (e) => e.preventDefault());
+    searchBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    searchBtn.onclick = () => {
+      if (state.chatSearch.open) {
+        closeChatSearch();
+        searchBtn.classList.remove('is-active');
+        if (window.innerWidth <= 700) popUiLayer();
+      } else {
+        openChatSearch();
+        searchBtn.classList.add('is-active');
+        if (window.innerWidth <= 700) pushUiLayer('search');
+      }
+      searchBtn.blur();
+    };
+  }
   $('#chat-search-input')?.addEventListener('input', (e) => runChatSearch(e.target.value));
   $('#chat-search-prev')?.addEventListener('click', () => stepChatSearch(-1));
   $('#chat-search-next')?.addEventListener('click', () => stepChatSearch(1));
   $('#chat-search-close')?.addEventListener('click', () => {
     if (state.chatSearch.open) {
       closeChatSearch();
+      $('#chat-search-btn')?.classList.remove('is-active');
       if (window.innerWidth <= 700) popUiLayer();
     }
   });
+
+  const sidebarSearchToggle = $('#sidebar-search-toggle');
+  const sidebarSearchBox = $('#sidebar-searchbox');
+  if (sidebarSearchToggle && sidebarSearchBox) {
+    sidebarSearchToggle.onclick = () => {
+      const opening = sidebarSearchBox.classList.contains('hidden');
+      sidebarSearchBox.classList.toggle('hidden', !opening);
+      sidebarSearchToggle.classList.toggle('is-active', opening);
+      sidebarSearchToggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      if (opening) {
+        $('#search')?.focus();
+      } else {
+        if ($('#search')) $('#search').value = '';
+        if (state.query) {
+          state.query = '';
+          renderChats();
+        }
+        sidebarSearchToggle.blur();
+      }
+    };
+  }
 
   $('#search').oninput = (e) => {
     state.query = e.target.value;
@@ -1707,10 +1882,11 @@ function wireEvents() {
     }
     if (state.chatSearch.open) {
       closeChatSearch();
+      $('#chat-search-btn')?.classList.remove('is-active');
       return;
     }
     if ($('#conversation').classList.contains('mobile-open')) {
-      $('#conversation').classList.remove('mobile-open');
+      leaveMobileConversation();
     }
   });
 
@@ -1798,11 +1974,12 @@ function wireEvents() {
     }
     if (state.chatSearch.open) {
       closeChatSearch();
+      $('#chat-search-btn')?.classList.remove('is-active');
       if (window.innerWidth <= 700) popUiLayer();
       return true;
     }
     if ($('#conversation').classList.contains('mobile-open')) {
-      $('#conversation').classList.remove('mobile-open');
+      leaveMobileConversation();
       popUiLayer();
       return true;
     }
