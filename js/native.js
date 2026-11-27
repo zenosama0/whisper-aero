@@ -304,6 +304,26 @@ export function clearNativeSession() {
   }
 }
 
+export function setNativeActiveChat(chatId) {
+  try {
+    if (isNativeAndroid() && typeof window.WhisperNative.setActiveChatId === 'function') {
+      window.WhisperNative.setActiveChatId(String(chatId || ''));
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+export function consumeNativePendingCameraPhoto() {
+  try {
+    if (isNativeAndroid() && typeof window.WhisperNative.consumePendingCameraPhoto === 'function') {
+      window.WhisperNative.consumePendingCameraPhoto();
+    }
+  } catch {
+    // Ignore
+  }
+}
+
 export function nativeCopyText(text) {
   try {
     if (isNativeAndroid() && typeof window.WhisperNative.copyToClipboard === 'function') {

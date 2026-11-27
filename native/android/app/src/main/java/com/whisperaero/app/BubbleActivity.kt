@@ -42,6 +42,7 @@ class BubbleActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var pendingCameraUri: Uri? = null
+    private var pendingCameraFilePath: String? = null
     private var pendingWebPermRequest: PermissionRequest? = null
     private var activeChatId: String = ""
     private var initialChatDelivered = false
@@ -57,14 +58,31 @@ class BubbleActivity : AppCompatActivity() {
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        val callback = filePathCallback ?: return@registerForActivityResult
+        val callback = filePathCallback
         filePathCallback = null
         val capturedUri = pendingCameraUri
         pendingCameraUri = null
+        val capturedFilePath = pendingCameraFilePath
+        pendingCameraFilePath = null
+
         if (result.resultCode != RESULT_OK) {
-            callback.onReceiveValue(null)
+            capturedFilePath?.let { path ->
+                runCatching {
+                    val f = File(path)
+                    if (f.exists() && f.length() == 0L) f.delete()
+                }
+            }
+            SessionStore.clearPendingCameraCapture(this)
+            callback?.onReceiveValue(null)
             return@registerForActivityResult
         }
+
+        if (callback == null) {
+            deliverPendingCameraPhotoIfAny()
+            return@registerForActivityResult
+        }
+
+        SessionStore.clearPendingCameraCapture(this)
         val data = result.data
         val list = mutableListOf<Uri>()
         val clip = data?.clipData
@@ -136,7 +154,9 @@ class BubbleActivity : AppCompatActivity() {
 
         webView.addJavascriptInterface(BubbleNativeBridge(), "WhisperNative")
 
-        activeChatId = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_ID) ?: ""
+        activeChatId = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_ID)
+            ?: savedInstanceState?.getString("active_chat_id")
+            ?: ""
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -162,6 +182,7 @@ class BubbleActivity : AppCompatActivity() {
                     initialChatDelivered = true
                     openChatInWeb(activeChatId)
                 }
+                deliverPendingCameraPhotoIfAny()
             }
         }
 
@@ -195,6 +216,7 @@ class BubbleActivity : AppCompatActivity() {
                 filePathCallback?.onReceiveValue(null)
                 filePathCallback = callback
                 pendingCameraUri = null
+                pendingCameraFilePath = null
                 val acceptTypes = fileChooserParams?.acceptTypes?.joinToString(",")?.lowercase().orEmpty()
                 val wantsCapture = fileChooserParams?.isCaptureEnabled == true
                 val wantsMedia = acceptTypes.contains("image/") || acceptTypes.contains("video/")
@@ -210,12 +232,21 @@ class BubbleActivity : AppCompatActivity() {
                             photoFile,
                         )
                         pendingCameraUri = outUri
+                        pendingCameraFilePath = photoFile.absolutePath
+                        val targetChat = activeChatId.ifBlank { SessionStore.getActiveChatId(this@BubbleActivity) }
+                        SessionStore.savePendingCameraCapture(
+                            this@BubbleActivity,
+                            photoFile.absolutePath,
+                            targetChat,
+                        )
                         Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
                             putExtra(MediaStore.EXTRA_OUTPUT, outUri)
                             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
                     } catch (_: Exception) {
                         pendingCameraUri = null
+                        pendingCameraFilePath = null
+                        SessionStore.clearPendingCameraCapture(this@BubbleActivity)
                         null
                     }
                 } else if (wantsMedia) {
@@ -253,6 +284,8 @@ class BubbleActivity : AppCompatActivity() {
                     }
                 } catch (_: Exception) {
                     pendingCameraUri = null
+                    pendingCameraFilePath = null
+                    SessionStore.clearPendingCameraCapture(this@BubbleActivity)
                     try {
                         val fallback = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)
@@ -269,12 +302,25 @@ class BubbleActivity : AppCompatActivity() {
             }
         }
 
-        val url = if (activeChatId.isNotBlank() && activeChatId != "whisper-preview") {
-            "https://zenosama0.github.io/whisper-aero/?bubble=1&chat=${Uri.encode(activeChatId)}"
-        } else {
-            "https://zenosama0.github.io/whisper-aero/?bubble=1"
+        val restored = if (savedInstanceState != null) webView.restoreState(savedInstanceState) else null
+        if (restored == null) {
+            val url = if (activeChatId.isNotBlank() && activeChatId != "whisper-preview") {
+                "https://zenosama0.github.io/whisper-aero/?bubble=1&chat=${Uri.encode(activeChatId)}"
+            } else {
+                "https://zenosama0.github.io/whisper-aero/?bubble=1"
+            }
+            webView.loadUrl(url)
+        } else if (activeChatId.isNotBlank() && activeChatId != "whisper-preview") {
+            openChatInWeb(activeChatId)
         }
-        webView.loadUrl(url)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString("active_chat_id", activeChatId)
+        if (::webView.isInitialized) {
+            webView.saveState(outState)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -306,6 +352,32 @@ class BubbleActivity : AppCompatActivity() {
         )
     }
 
+    private fun deliverPendingCameraPhotoIfAny() {
+        if (!::webView.isInitialized) return
+        if (SessionStore.getPendingCameraCapture(this) == null) return
+        runOnUiThread {
+            if (!::webView.isInitialized) return@runOnUiThread
+            webView.evaluateJavascript("typeof window.WhisperReceiveCapturedPhoto === 'function'") { ready ->
+                if (ready != "true") return@evaluateJavascript
+                Thread {
+                    val payload = SessionStore.consumePendingCameraPhotoPayload(this@BubbleActivity)
+                        ?: return@Thread
+                    val qB64 = JSONObject.quote(payload.base64)
+                    val qName = JSONObject.quote(payload.fileName)
+                    val qChat = JSONObject.quote(payload.chatId)
+                    runOnUiThread {
+                        if (::webView.isInitialized) {
+                            webView.evaluateJavascript(
+                                "if(typeof window.WhisperReceiveCapturedPhoto==='function') window.WhisperReceiveCapturedPhoto($qB64,$qName,$qChat);",
+                                null,
+                            )
+                        }
+                    }
+                }.start()
+            }
+        }
+    }
+
     private inner class BubbleNativeBridge {
         @JavascriptInterface
         fun isNative(): Boolean = true
@@ -328,6 +400,16 @@ class BubbleActivity : AppCompatActivity() {
         fun syncSession(json: String?) {
             if (json.isNullOrBlank()) return
             SessionStore.saveFromJson(this@BubbleActivity, json)
+        }
+
+        @JavascriptInterface
+        fun setActiveChatId(chatId: String?) {
+            SessionStore.setActiveChatId(this@BubbleActivity, chatId?.trim().orEmpty())
+        }
+
+        @JavascriptInterface
+        fun consumePendingCameraPhoto() {
+            deliverPendingCameraPhotoIfAny()
         }
 
         @JavascriptInterface

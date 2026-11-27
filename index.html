@@ -25,14 +25,18 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=29"><link rel="stylesheet" href="auth.css?v=29"><link rel="stylesheet" href="overrides.css?v=29">
+  <link rel="stylesheet" href="styles.css?v=30"><link rel="stylesheet" href="auth.css?v=30"><link rel="stylesheet" href="overrides.css?v=30">
   <title>Whisper | messages, made personal</title>
   <script>
-    window.WHISPER_VERSION = '2026.11.27.29';
+    window.WHISPER_VERSION = '2026.11.27.30';
     (function () {
-      async function checkForUpdate() {
+      let lastUpdateCheckAt = 0;
+      async function checkForUpdate(force) {
+        const now = Date.now();
+        if (!force && now - lastUpdateCheckAt < 5 * 60 * 1000) return;
+        lastUpdateCheckAt = now;
         try {
-          const res = await fetch('./version.json?t=' + Date.now(), { cache: 'no-store' });
+          const res = await fetch('./version.json?t=' + now, { cache: 'no-store' });
           if (!res.ok) return;
           const data = await res.json();
           const latest = data && data.version;
@@ -52,17 +56,22 @@
             const reg = await navigator.serviceWorker.getRegistration();
             if (reg) await reg.update().catch(() => {});
           }
-          window.location.reload();
+          // Only auto-reload on initial boot before a session/chat is active;
+          // reloading mid-session drops pending attachments (e.g. camera return).
+          if (!document.body || !document.body.classList.contains('authenticated')) {
+            window.location.reload();
+          }
         } catch {}
       }
-      checkForUpdate();
+      checkForUpdate(true);
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') checkForUpdate();
+        if (document.visibilityState === 'visible') checkForUpdate(false);
       });
       if ('serviceWorker' in navigator) {
         let refreshing = false;
         navigator.serviceWorker.addEventListener('controllerchange', () => {
           if (refreshing) return;
+          if (document.body && document.body.classList.contains('authenticated')) return;
           refreshing = true;
           window.location.reload();
         });
@@ -100,5 +109,5 @@
   <dialog id="modal" class="modal"><form method="dialog" class="modal-card" id="modal-content"><button class="modal-x" value="cancel" aria-label="Close">×</button><div id="modal-body"></div></form></dialog>
   <div class="toast" id="toast" role="status"></div>
   <script src="./app-config.js"></script>
-  <script type="module" src="app.js?v=29"></script>
+  <script type="module" src="app.js?v=30"></script>
 </body></html>

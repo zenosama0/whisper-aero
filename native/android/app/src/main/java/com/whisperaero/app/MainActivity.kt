@@ -61,6 +61,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var pendingCameraUri: Uri? = null
+    private var pendingCameraFilePath: String? = null
     private var pendingWebPermRequest: PermissionRequest? = null
     private var pendingChatFromIntent: String? = null
     private var pendingSharedText: String? = null
@@ -76,14 +77,33 @@ class MainActivity : AppCompatActivity() {
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        val callback = filePathCallback ?: return@registerForActivityResult
+        val callback = filePathCallback
         filePathCallback = null
         val capturedUri = pendingCameraUri
         pendingCameraUri = null
+        val capturedFilePath = pendingCameraFilePath
+        pendingCameraFilePath = null
+
         if (result.resultCode != RESULT_OK) {
-            callback.onReceiveValue(null)
+            capturedFilePath?.let { path ->
+                runCatching {
+                    val f = File(path)
+                    if (f.exists() && f.length() == 0L) f.delete()
+                }
+            }
+            SessionStore.clearPendingCameraCapture(this)
+            callback?.onReceiveValue(null)
             return@registerForActivityResult
         }
+
+        if (callback == null) {
+            // Activity was destroyed/recreated while the OEM Camera was open.
+            // Keep SessionStore pending capture intact and deliver directly to WebView once JS is ready.
+            deliverPendingCameraPhotoIfAny()
+            return@registerForActivityResult
+        }
+
+        SessionStore.clearPendingCameraCapture(this)
         val data = result.data
         val list = mutableListOf<Uri>()
         val clip = data?.clipData
@@ -129,6 +149,10 @@ class MainActivity : AppCompatActivity() {
         requestNotificationPermissionIfNeeded()
 
         pendingChatFromIntent = extractChatId(intent)
+        if (pendingChatFromIntent.isNullOrBlank()) {
+            val camChat = SessionStore.getPendingCameraCapture(this)?.chatId
+            if (!camChat.isNullOrBlank()) pendingChatFromIntent = camChat
+        }
         pendingSharedText = extractSharedText(intent)
 
         rootContainer = FrameLayout(this).apply {
@@ -218,6 +242,7 @@ class MainActivity : AppCompatActivity() {
                     pendingSharedText = null
                     deliverSharedText(shared)
                 }
+                deliverPendingCameraPhotoIfAny()
                 notifyCapabilitiesChanged()
             }
         }
@@ -252,6 +277,7 @@ class MainActivity : AppCompatActivity() {
                 filePathCallback?.onReceiveValue(null)
                 filePathCallback = callback
                 pendingCameraUri = null
+                pendingCameraFilePath = null
                 val acceptTypes = fileChooserParams?.acceptTypes?.joinToString(",")?.lowercase().orEmpty()
                 val wantsCapture = fileChooserParams?.isCaptureEnabled == true
                 val wantsMedia = acceptTypes.contains("image/") || acceptTypes.contains("video/")
@@ -267,12 +293,20 @@ class MainActivity : AppCompatActivity() {
                             photoFile,
                         )
                         pendingCameraUri = outUri
+                        pendingCameraFilePath = photoFile.absolutePath
+                        SessionStore.savePendingCameraCapture(
+                            this@MainActivity,
+                            photoFile.absolutePath,
+                            SessionStore.getActiveChatId(this@MainActivity),
+                        )
                         Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
                             putExtra(MediaStore.EXTRA_OUTPUT, outUri)
                             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
                     } catch (_: Exception) {
                         pendingCameraUri = null
+                        pendingCameraFilePath = null
+                        SessionStore.clearPendingCameraCapture(this@MainActivity)
                         null
                     }
                 } else if (wantsMedia) {
@@ -310,6 +344,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 } catch (_: Exception) {
                     pendingCameraUri = null
+                    pendingCameraFilePath = null
+                    SessionStore.clearPendingCameraCapture(this@MainActivity)
                     try {
                         val fallback = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)
@@ -366,16 +402,28 @@ class MainActivity : AppCompatActivity() {
             },
         )
 
-        val initialUrl = if (!pendingChatFromIntent.isNullOrBlank()) {
-            "$BASE_URL?chat=${Uri.encode(pendingChatFromIntent)}"
-        } else {
-            BASE_URL
+        val restored = if (savedInstanceState != null) webView.restoreState(savedInstanceState) else null
+        if (restored == null) {
+            val initialUrl = if (!pendingChatFromIntent.isNullOrBlank()) {
+                "$BASE_URL?chat=${Uri.encode(pendingChatFromIntent)}"
+            } else {
+                BASE_URL
+            }
+            webView.loadUrl(initialUrl)
+        } else if (!pendingChatFromIntent.isNullOrBlank()) {
+            openChatInWeb(pendingChatFromIntent!!)
         }
-        webView.loadUrl(initialUrl)
         WhisperSyncService.syncState(this)
         WhisperSyncWorker.schedule(this)
         pendingChatFromIntent?.let { if (it.isNotBlank()) NotificationHelper.clearIncomingCall(this, it) }
         syncFcmIfConfigured()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (::webView.isInitialized) {
+            webView.saveState(outState)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -450,6 +498,32 @@ class MainActivity : AppCompatActivity() {
             "if(typeof window.WhisperReceiveSharedText==='function') window.WhisperReceiveSharedText($quoted);",
             null,
         )
+    }
+
+    private fun deliverPendingCameraPhotoIfAny() {
+        if (!::webView.isInitialized) return
+        if (SessionStore.getPendingCameraCapture(this) == null) return
+        runOnUiThread {
+            if (!::webView.isInitialized) return@runOnUiThread
+            webView.evaluateJavascript("typeof window.WhisperReceiveCapturedPhoto === 'function'") { ready ->
+                if (ready != "true") return@evaluateJavascript
+                Thread {
+                    val payload = SessionStore.consumePendingCameraPhotoPayload(this@MainActivity)
+                        ?: return@Thread
+                    val qB64 = JSONObject.quote(payload.base64)
+                    val qName = JSONObject.quote(payload.fileName)
+                    val qChat = JSONObject.quote(payload.chatId)
+                    runOnUiThread {
+                        if (::webView.isInitialized) {
+                            webView.evaluateJavascript(
+                                "if(typeof window.WhisperReceiveCapturedPhoto==='function') window.WhisperReceiveCapturedPhoto($qB64,$qName,$qChat);",
+                                null,
+                            )
+                        }
+                    }
+                }.start()
+            }
+        }
     }
 
     private fun notifyCapabilitiesChanged() {
@@ -698,6 +772,16 @@ class MainActivity : AppCompatActivity() {
                 SessionStore.clear(this@MainActivity)
                 WhisperSyncService.syncState(this@MainActivity)
             }.start()
+        }
+
+        @JavascriptInterface
+        fun setActiveChatId(chatId: String?) {
+            SessionStore.setActiveChatId(this@MainActivity, chatId?.trim().orEmpty())
+        }
+
+        @JavascriptInterface
+        fun consumePendingCameraPhoto() {
+            deliverPendingCameraPhotoIfAny()
         }
 
         @JavascriptInterface

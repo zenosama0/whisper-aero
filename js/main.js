@@ -1,14 +1,15 @@
 import { config, configured, supabase } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=29';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=30';
 import {
   isHeicFile,
   isImageFile,
   isVideoFile,
   normalizeUploadFile,
-} from './media.js?v=29';
+} from './media.js?v=30';
 import {
   clearNativeSession,
+  consumeNativePendingCameraPhoto,
   getNativeStoredSession,
   isBubbleWindow,
   isNativeAndroid,
@@ -16,11 +17,12 @@ import {
   openNativeChatBubble,
   pushNativeChatShortcuts,
   sendNativeNotification,
+  setNativeActiveChat,
   startNativeGoogleSignIn,
   syncNativeSession,
   syncNativeTheme,
   triggerNativeCallAlarm,
-} from './native.js?v=29';
+} from './native.js?v=30';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import {
   getActiveChat,
@@ -95,6 +97,7 @@ let refreshPromise = null;
 let resumePromise = null;
 let lastResumeSyncAt = 0;
 let pendingSharedText = '';
+let pendingNativeCameraPhoto = null;
 const typingTimers = new Map();
 
 const bootSplash = $('#boot-splash');
@@ -800,6 +803,63 @@ function handleRemoteTyping(conversationId, _peerId, isTyping) {
   if (state.activeChatId === conversationId) updateTypingBanner();
 }
 
+async function stageAttachmentFiles(fileList) {
+  const c = getActiveChat();
+  const files = [...(fileList || [])].filter(Boolean);
+  if (!files.length || !c) return;
+  if (!Array.isArray(state.pendingAttachments)) state.pendingAttachments = [];
+
+  const hasHeic = files.some((f) => isHeicFile(f));
+  if (hasHeic) showToast('Converting HEIC photo for preview…');
+
+  let skippedSize = 0;
+  let added = 0;
+  for (const rawFile of files) {
+    if (state.pendingAttachments.length >= 12) {
+      showToast('You can queue up to 12 attachments at once');
+      break;
+    }
+    const file = isHeicFile(rawFile) ? await normalizeUploadFile(rawFile) : rawFile;
+    if (file.size > 10 * 1024 * 1024) {
+      skippedSize++;
+      continue;
+    }
+    const previewUrl = (isImageFile(file) || isVideoFile(file))
+      ? URL.createObjectURL(file)
+      : '';
+    state.pendingAttachments.push({
+      id: crypto.randomUUID(),
+      file,
+      previewUrl,
+      isViewOnce: false,
+    });
+    added++;
+  }
+  if (skippedSize) {
+    showToast(skippedSize === 1 ? 'Skipped a file larger than 10 MB' : `Skipped ${skippedSize} files larger than 10 MB`);
+  }
+  if (added) {
+    renderAttachmentPreview();
+    $('#message-input')?.focus({ preventScroll: true });
+  }
+}
+
+async function attachCapturedPhotoPayload({ file, chatId }) {
+  if (!file) return;
+  if (!state.user?.id || !state.chats.length) {
+    pendingNativeCameraPhoto = { file, chatId };
+    return;
+  }
+  if (chatId && state.activeChatId !== chatId && getChat(chatId)) {
+    await selectChat(chatId, { allowInBubble: true });
+  }
+  if (!getActiveChat()) {
+    pendingNativeCameraPhoto = { file, chatId };
+    return;
+  }
+  await stageAttachmentFiles([file]);
+}
+
 async function enterCloud(user) {
   if (!user?.id || user.id === activeUserId || user.id === enteringUserId) return;
   enteringUserId = user.id;
@@ -845,6 +905,12 @@ async function enterCloud(user) {
     }
     pushNativeSession();
     startRealtime(user.id, getRealtimeHandlers());
+    if (pendingNativeCameraPhoto) {
+      const queuedPhoto = pendingNativeCameraPhoto;
+      pendingNativeCameraPhoto = null;
+      await attachCapturedPhotoPayload(queuedPhoto);
+    }
+    consumeNativePendingCameraPhoto();
   } catch (error) {
     activeUserId = null;
     showAuth('login');
@@ -990,6 +1056,7 @@ async function handleSendText() {
 function wireEvents() {
   initChatUI({
     onChatSelected: (convId) => {
+      setNativeActiveChat(convId);
       applyChatTheme(getEffectiveChatTheme(convId));
       joinConversationTyping(convId, state.user.id, handleRemoteTyping);
       if (pendingSharedText) {
@@ -1174,47 +1241,6 @@ function wireEvents() {
       $('#auth-submit').disabled = false;
     }
   };
-
-  async function stageAttachmentFiles(fileList) {
-    const c = getActiveChat();
-    const files = [...(fileList || [])].filter(Boolean);
-    if (!files.length || !c) return;
-    if (!Array.isArray(state.pendingAttachments)) state.pendingAttachments = [];
-
-    const hasHeic = files.some((f) => isHeicFile(f));
-    if (hasHeic) showToast('Converting HEIC photo for preview…');
-
-    let skippedSize = 0;
-    let added = 0;
-    for (const rawFile of files) {
-      if (state.pendingAttachments.length >= 12) {
-        showToast('You can queue up to 12 attachments at once');
-        break;
-      }
-      const file = isHeicFile(rawFile) ? await normalizeUploadFile(rawFile) : rawFile;
-      if (file.size > 10 * 1024 * 1024) {
-        skippedSize++;
-        continue;
-      }
-      const previewUrl = (isImageFile(file) || isVideoFile(file))
-        ? URL.createObjectURL(file)
-        : '';
-      state.pendingAttachments.push({
-        id: crypto.randomUUID(),
-        file,
-        previewUrl,
-        isViewOnce: false,
-      });
-      added++;
-    }
-    if (skippedSize) {
-      showToast(skippedSize === 1 ? 'Skipped a file larger than 10 MB' : `Skipped ${skippedSize} files larger than 10 MB`);
-    }
-    if (added) {
-      renderAttachmentPreview();
-      $('#message-input')?.focus({ preventScroll: true });
-    }
-  }
 
   function closeAttachMenu(fromPop = false) {
     const existing = document.querySelector('.attach-picker-backdrop');
@@ -1700,6 +1726,7 @@ function wireEvents() {
     $('#conversation')?.classList.remove('mobile-open');
     if (window.innerWidth <= 700 || isBubbleWindow()) {
       state.activeChatId = null;
+      setNativeActiveChat('');
       applyChatTheme();
       renderChats();
     }
@@ -2063,6 +2090,17 @@ function wireEvents() {
   };
   window.WhisperOpenChat = (chatId) => {
     if (chatId) resumeSync({ forceChatId: String(chatId) });
+  };
+  window.WhisperReceiveCapturedPhoto = async (base64, fileName, chatId) => {
+    try {
+      const bin = atob(String(base64 || ''));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const file = new File([bytes], fileName || `photo-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      await attachCapturedPhotoPayload({ file, chatId: String(chatId || '').trim() });
+    } catch {
+      showToast('Could not load captured photo');
+    }
   };
   window.WhisperReceiveSharedText = (text) => {
     const clean = String(text || '').trim();

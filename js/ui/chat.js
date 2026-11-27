@@ -7,7 +7,7 @@ import {
   nativeCopyText,
   nativeShareText,
   openNativeChatBubble,
-} from '../native.js?v=29';
+} from '../native.js?v=30';
 import {
   formatAudioClock,
   isAudioFile,
@@ -15,7 +15,7 @@ import {
   isImageFile,
   isVideoFile,
   resolveHeicPreviewUrl,
-} from '../media.js?v=29';
+} from '../media.js?v=30';
 import {
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,
