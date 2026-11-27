@@ -35,6 +35,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -49,6 +50,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import org.json.JSONObject
+import java.io.File
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
@@ -58,32 +60,49 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rootContainer: FrameLayout
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingCameraUri: Uri? = null
+    private var pendingWebPermRequest: PermissionRequest? = null
     private var pendingChatFromIntent: String? = null
     private var pendingSharedText: String? = null
+
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val req = pendingWebPermRequest ?: return@registerForActivityResult
+        pendingWebPermRequest = null
+        if (granted) req.grant(req.resources) else req.deny()
+    }
 
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         val callback = filePathCallback ?: return@registerForActivityResult
         filePathCallback = null
-        val data = result.data
-        if (result.resultCode != RESULT_OK || data == null) {
+        val capturedUri = pendingCameraUri
+        pendingCameraUri = null
+        if (result.resultCode != RESULT_OK) {
             callback.onReceiveValue(null)
             return@registerForActivityResult
         }
+        val data = result.data
         val list = mutableListOf<Uri>()
-        val clip = data.clipData
+        val clip = data?.clipData
         if (clip != null && clip.itemCount > 0) {
             for (i in 0 until clip.itemCount) {
                 clip.getItemAt(i)?.uri?.let { list.add(it) }
             }
         } else {
-            data.data?.let { list.add(it) }
+            data?.data?.let { list.add(it) }
+        }
+        if (list.isEmpty() && capturedUri != null) {
+            list.add(capturedUri)
         }
         val uris = if (list.isNotEmpty()) {
             list.toTypedArray()
-        } else {
+        } else if (data != null) {
             WebChromeClient.FileChooserParams.parseResult(result.resultCode, data)
+        } else {
+            null
         }
         callback.onReceiveValue(uris)
     }
@@ -207,10 +226,21 @@ class MainActivity : AppCompatActivity() {
             override fun onPermissionRequest(request: PermissionRequest?) {
                 if (request == null) return
                 val originHost = (request.origin?.host ?: "").lowercase()
-                if (originHost == "zenosama0.github.io") {
-                    request.grant(request.resources)
-                } else {
+                if (originHost != "zenosama0.github.io") {
                     request.deny()
+                    return
+                }
+                val needsAudio = request.resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                if (needsAudio && ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        Manifest.permission.RECORD_AUDIO,
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    pendingWebPermRequest?.deny()
+                    pendingWebPermRequest = request
+                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                } else {
+                    request.grant(request.resources)
                 }
             }
 
@@ -221,11 +251,31 @@ class MainActivity : AppCompatActivity() {
             ): Boolean {
                 filePathCallback?.onReceiveValue(null)
                 filePathCallback = callback
+                pendingCameraUri = null
                 val acceptTypes = fileChooserParams?.acceptTypes?.joinToString(",")?.lowercase().orEmpty()
+                val wantsCapture = fileChooserParams?.isCaptureEnabled == true
                 val wantsMedia = acceptTypes.contains("image/") || acceptTypes.contains("video/")
                 val allowMultiple = fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE
 
-                val primaryIntent = if (wantsMedia) {
+                val primaryIntent = if (wantsCapture) {
+                    try {
+                        val camDir = File(cacheDir, "camera").apply { mkdirs() }
+                        val photoFile = File(camDir, "whisper-cam-${System.currentTimeMillis()}.jpg")
+                        val outUri = FileProvider.getUriForFile(
+                            this@MainActivity,
+                            "${packageName}.fileprovider",
+                            photoFile,
+                        )
+                        pendingCameraUri = outUri
+                        Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                            putExtra(MediaStore.EXTRA_OUTPUT, outUri)
+                            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                    } catch (_: Exception) {
+                        pendingCameraUri = null
+                        null
+                    }
+                } else if (wantsMedia) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         Intent(MediaStore.ACTION_PICK_IMAGES).apply {
                             if (allowMultiple) {
@@ -252,9 +302,14 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 return try {
-                    filePickerLauncher.launch(primaryIntent)
-                    true
+                    if (primaryIntent != null) {
+                        filePickerLauncher.launch(primaryIntent)
+                        true
+                    } else {
+                        throw IllegalStateException("No primary intent")
+                    }
                 } catch (_: Exception) {
+                    pendingCameraUri = null
                     try {
                         val fallback = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)

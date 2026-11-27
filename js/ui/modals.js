@@ -1,5 +1,5 @@
 import * as api from '../api.js';
-import { searchEmojis } from '../emoji.js?v=28';
+import { searchEmojis } from '../emoji.js?v=29';
 import {
   getNativeCapabilities,
   isNativeAndroid,
@@ -12,7 +12,7 @@ import {
   setNativeBackgroundSync,
   setWindowsMinimizeToTray,
   setWindowsStartup,
-} from '../native.js?v=28';
+} from '../native.js?v=29';
 import {
   CHAT_THEME_PRESETS,
   DEFAULT_DOUBLE_TAP_EMOJI,

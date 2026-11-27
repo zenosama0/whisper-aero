@@ -1,6 +1,12 @@
 import { config, configured, supabase } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=28';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=29';
+import {
+  isHeicFile,
+  isImageFile,
+  isVideoFile,
+  normalizeUploadFile,
+} from './media.js?v=29';
 import {
   clearNativeSession,
   getNativeStoredSession,
@@ -14,7 +20,7 @@ import {
   syncNativeSession,
   syncNativeTheme,
   triggerNativeCallAlarm,
-} from './native.js?v=28';
+} from './native.js?v=29';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import {
   getActiveChat,
@@ -1169,24 +1175,28 @@ function wireEvents() {
     }
   };
 
-  function stageAttachmentFiles(fileList) {
+  async function stageAttachmentFiles(fileList) {
     const c = getActiveChat();
     const files = [...(fileList || [])].filter(Boolean);
     if (!files.length || !c) return;
     if (!Array.isArray(state.pendingAttachments)) state.pendingAttachments = [];
 
+    const hasHeic = files.some((f) => isHeicFile(f));
+    if (hasHeic) showToast('Converting HEIC photo for preview…');
+
     let skippedSize = 0;
     let added = 0;
-    for (const file of files) {
+    for (const rawFile of files) {
       if (state.pendingAttachments.length >= 12) {
         showToast('You can queue up to 12 attachments at once');
         break;
       }
+      const file = isHeicFile(rawFile) ? await normalizeUploadFile(rawFile) : rawFile;
       if (file.size > 10 * 1024 * 1024) {
         skippedSize++;
         continue;
       }
-      const previewUrl = (file.type?.startsWith('image/') || file.type?.startsWith('video/'))
+      const previewUrl = (isImageFile(file) || isVideoFile(file))
         ? URL.createObjectURL(file)
         : '';
       state.pendingAttachments.push({
@@ -1239,6 +1249,12 @@ function wireEvents() {
     pop.addEventListener('pointerdown', (e) => e.preventDefault());
     pop.addEventListener('mousedown', (e) => e.preventDefault());
     pop.innerHTML = `
+      <button type="button" class="attach-opt-btn" data-attach-kind="camera" role="menuitem">
+        <span class="attach-opt-ico camera" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+        </span>
+        <span class="attach-opt-label">Camera</span>
+      </button>
       <button type="button" class="attach-opt-btn" data-attach-kind="media" role="menuitem">
         <span class="attach-opt-ico media" aria-hidden="true">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
@@ -1284,13 +1300,135 @@ function wireEvents() {
         const kind = btn.dataset.attachKind;
         haptic(8);
         closeAttachMenu();
-        if (kind === 'media') $('#media-input')?.click();
+        if (kind === 'camera') $('#camera-input')?.click();
+        else if (kind === 'media') $('#media-input')?.click();
         else $('#file-input')?.click();
       };
       btn.addEventListener('touchend', triggerPick, { passive: false });
       btn.addEventListener('click', triggerPick);
     });
   }
+
+  let voiceRecorder = null;
+  let voiceStream = null;
+  let voiceChunks = [];
+  let voiceStartAt = 0;
+  let voiceTimerId = 0;
+  let voiceMime = '';
+
+  function stopVoiceTracks() {
+    clearInterval(voiceTimerId);
+    voiceTimerId = 0;
+    voiceStream?.getTracks?.().forEach((t) => t.stop());
+    voiceStream = null;
+    $('#voice-recorder')?.classList.add('hidden');
+    $('#composer')?.classList.remove('hidden');
+  }
+
+  $('#mic-btn')?.addEventListener('pointerdown', (e) => e.preventDefault());
+  $('#mic-btn')?.addEventListener('mousedown', (e) => e.preventDefault());
+  $('#mic-btn')?.addEventListener('click', async () => {
+    const c = getActiveChat();
+    if (!c) return;
+    if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      showToast('Voice recording is not supported here');
+      return;
+    }
+    try {
+      voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      showToast('Microphone permission is required for voice messages');
+      return;
+    }
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+    voiceMime = candidates.find((m) => MediaRecorder.isTypeSupported(m)) || '';
+    voiceChunks = [];
+    voiceRecorder = voiceMime
+      ? new MediaRecorder(voiceStream, { mimeType: voiceMime })
+      : new MediaRecorder(voiceStream);
+    voiceRecorder.ondataavailable = (ev) => {
+      if (ev.data && ev.data.size > 0) voiceChunks.push(ev.data);
+    };
+    voiceStartAt = Date.now();
+    $('#voice-timer').textContent = '0:00';
+    $('#composer')?.classList.add('hidden');
+    $('#voice-recorder')?.classList.remove('hidden');
+    haptic(12);
+    voiceRecorder.start(250);
+    voiceTimerId = setInterval(() => {
+      const sec = Math.floor((Date.now() - voiceStartAt) / 1000);
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      $('#voice-timer').textContent = `${m}:${String(s).padStart(2, '0')}`;
+      if (sec >= 300) $('#voice-send-btn')?.click();
+    }, 250);
+  });
+
+  $('#voice-cancel-btn')?.addEventListener('click', () => {
+    const rec = voiceRecorder;
+    voiceRecorder = null;
+    if (rec && rec.state !== 'inactive') {
+      rec.onstop = () => { voiceChunks = []; };
+      rec.stop();
+    } else {
+      voiceChunks = [];
+    }
+    stopVoiceTracks();
+    haptic(8);
+  });
+
+  $('#voice-send-btn')?.addEventListener('click', () => {
+    const c = getActiveChat();
+    const rec = voiceRecorder;
+    if (!rec || !c) {
+      stopVoiceTracks();
+      return;
+    }
+    voiceRecorder = null;
+    const replyTo = state.replyingTo;
+    rec.onstop = async () => {
+      const chunks = [...voiceChunks];
+      voiceChunks = [];
+      stopVoiceTracks();
+      const rawType = rec.mimeType || voiceMime || 'audio/webm';
+      const cleanType = rawType.split(';')[0] || 'audio/webm';
+      const blob = new Blob(chunks, { type: cleanType });
+      if (blob.size < 1) {
+        showToast('Recorded audio was empty');
+        return;
+      }
+      if (blob.size > 10 * 1024 * 1024) {
+        showToast('Voice message must be 10 MB or smaller');
+        return;
+      }
+      const ext = cleanType.includes('mp4') ? 'm4a' : cleanType.includes('ogg') ? 'ogg' : 'webm';
+      const file = new File([blob], `voice-message-${Date.now()}.${ext}`, { type: cleanType });
+      clearComposeContext();
+      showToast('Sending voice message…');
+      try {
+        await api.sendAttachment({
+          conversationId: c.id,
+          file,
+          caption: '',
+          replyToId: replyTo?.id || null,
+          viewOnce: false,
+        });
+        api.triggerPushNotification({
+          conversationId: c.id,
+          title: state.user.name || state.user.username,
+          body: 'Sent a voice message',
+          tag: `whisper-msg-${c.id}`,
+        });
+      } catch (error) {
+        showToast(error.message || 'Could not send voice message');
+      }
+    };
+    if (rec.state !== 'inactive') {
+      rec.stop();
+    } else {
+      stopVoiceTracks();
+    }
+  });
 
   const sendBtn = $('.send-btn');
   sendBtn?.addEventListener('pointerdown', (e) => e.preventDefault());
@@ -1369,6 +1507,10 @@ function wireEvents() {
     attachBtn.addEventListener('click', toggleAttach);
   }
 
+  $('#camera-input')?.addEventListener('change', (event) => {
+    if (event.target.files?.length) stageAttachmentFiles(event.target.files);
+    event.target.value = '';
+  });
   $('#media-input')?.addEventListener('change', (event) => {
     if (event.target.files?.length) stageAttachmentFiles(event.target.files);
     event.target.value = '';

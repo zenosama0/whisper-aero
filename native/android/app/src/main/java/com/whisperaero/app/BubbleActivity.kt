@@ -1,10 +1,12 @@
 package com.whisperaero.app
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -26,42 +28,62 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import org.json.JSONObject
+import java.io.File
 
 class BubbleActivity : AppCompatActivity() {
 
     private lateinit var rootContainer: FrameLayout
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingCameraUri: Uri? = null
+    private var pendingWebPermRequest: PermissionRequest? = null
     private var activeChatId: String = ""
     private var initialChatDelivered = false
+
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val req = pendingWebPermRequest ?: return@registerForActivityResult
+        pendingWebPermRequest = null
+        if (granted) req.grant(req.resources) else req.deny()
+    }
 
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         val callback = filePathCallback ?: return@registerForActivityResult
         filePathCallback = null
-        val data = result.data
-        if (result.resultCode != RESULT_OK || data == null) {
+        val capturedUri = pendingCameraUri
+        pendingCameraUri = null
+        if (result.resultCode != RESULT_OK) {
             callback.onReceiveValue(null)
             return@registerForActivityResult
         }
+        val data = result.data
         val list = mutableListOf<Uri>()
-        val clip = data.clipData
+        val clip = data?.clipData
         if (clip != null && clip.itemCount > 0) {
             for (i in 0 until clip.itemCount) {
                 clip.getItemAt(i)?.uri?.let { list.add(it) }
             }
         } else {
-            data.data?.let { list.add(it) }
+            data?.data?.let { list.add(it) }
+        }
+        if (list.isEmpty() && capturedUri != null) {
+            list.add(capturedUri)
         }
         val uris = if (list.isNotEmpty()) {
             list.toTypedArray()
-        } else {
+        } else if (data != null) {
             WebChromeClient.FileChooserParams.parseResult(result.resultCode, data)
+        } else {
+            null
         }
         callback.onReceiveValue(uris)
     }
@@ -146,10 +168,22 @@ class BubbleActivity : AppCompatActivity() {
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest?) {
                 if (request == null) return
-                if ((request.origin?.host ?: "").equals("zenosama0.github.io", ignoreCase = true)) {
-                    request.grant(request.resources)
-                } else {
+                val originHost = (request.origin?.host ?: "").lowercase()
+                if (!originHost.equals("zenosama0.github.io", ignoreCase = true)) {
                     request.deny()
+                    return
+                }
+                val needsAudio = request.resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                if (needsAudio && ContextCompat.checkSelfPermission(
+                        this@BubbleActivity,
+                        Manifest.permission.RECORD_AUDIO,
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    pendingWebPermRequest?.deny()
+                    pendingWebPermRequest = request
+                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                } else {
+                    request.grant(request.resources)
                 }
             }
 
@@ -160,11 +194,31 @@ class BubbleActivity : AppCompatActivity() {
             ): Boolean {
                 filePathCallback?.onReceiveValue(null)
                 filePathCallback = callback
+                pendingCameraUri = null
                 val acceptTypes = fileChooserParams?.acceptTypes?.joinToString(",")?.lowercase().orEmpty()
+                val wantsCapture = fileChooserParams?.isCaptureEnabled == true
                 val wantsMedia = acceptTypes.contains("image/") || acceptTypes.contains("video/")
                 val allowMultiple = fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE
 
-                val primaryIntent = if (wantsMedia) {
+                val primaryIntent = if (wantsCapture) {
+                    try {
+                        val camDir = File(cacheDir, "camera").apply { mkdirs() }
+                        val photoFile = File(camDir, "whisper-cam-${System.currentTimeMillis()}.jpg")
+                        val outUri = FileProvider.getUriForFile(
+                            this@BubbleActivity,
+                            "${packageName}.fileprovider",
+                            photoFile,
+                        )
+                        pendingCameraUri = outUri
+                        Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                            putExtra(MediaStore.EXTRA_OUTPUT, outUri)
+                            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                    } catch (_: Exception) {
+                        pendingCameraUri = null
+                        null
+                    }
+                } else if (wantsMedia) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         Intent(MediaStore.ACTION_PICK_IMAGES).apply {
                             if (allowMultiple) {
@@ -191,9 +245,14 @@ class BubbleActivity : AppCompatActivity() {
                 }
 
                 return try {
-                    filePickerLauncher.launch(primaryIntent)
-                    true
+                    if (primaryIntent != null) {
+                        filePickerLauncher.launch(primaryIntent)
+                        true
+                    } else {
+                        throw IllegalStateException("No primary intent")
+                    }
                 } catch (_: Exception) {
+                    pendingCameraUri = null
                     try {
                         val fallback = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)

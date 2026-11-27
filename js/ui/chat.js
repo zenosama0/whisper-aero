@@ -7,7 +7,15 @@ import {
   nativeCopyText,
   nativeShareText,
   openNativeChatBubble,
-} from '../native.js?v=28';
+} from '../native.js?v=29';
+import {
+  formatAudioClock,
+  isAudioFile,
+  isHeicFile,
+  isImageFile,
+  isVideoFile,
+  resolveHeicPreviewUrl,
+} from '../media.js?v=29';
 import {
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,
@@ -351,24 +359,38 @@ export function renderSharedMedia() {
   }
   box.innerHTML = `<div class="shared-grid">${media
     .slice(0, 12)
-    .map((m) => `<button type="button" class="shared-tile" data-shared-id="${esc(m.id)}" data-shared-type="${esc(m.type)}" data-shared-name="${esc(m.name)}" title="${esc(m.name)}">${m.type.startsWith('video/') ? '▶' : '▧'}</button>`)
+    .map((m) => `<button type="button" class="shared-tile" data-shared-id="${esc(m.id)}" data-shared-type="${esc(m.type)}" data-shared-name="${esc(m.name)}" title="${esc(m.name)}">${isVideoFile(m) ? '▶' : '▧'}</button>`)
     .join('')}</div>`;
 
   box.querySelectorAll('[data-shared-id]').forEach(async (btn) => {
     const id = btn.dataset.sharedId;
     const type = btn.dataset.sharedType;
     const name = btn.dataset.sharedName;
-    const url = await api.getAttachmentUrl(id);
-    if (!url || !btn.isConnected) return;
-    if (type.startsWith('image/')) {
-      btn.innerHTML = `<img class="shared-thumb" src="${esc(url)}" alt="${esc(name)}" loading="lazy">`;
+    const signedUrl = await api.getAttachmentUrl(id);
+    if (!signedUrl || !btn.isConnected) return;
+    let url = signedUrl;
+    if (isHeicFile({ type, name })) {
+      const converted = await resolveHeicPreviewUrl(id, signedUrl);
+      if (!btn.isConnected) return;
+      if (converted) url = converted;
+    }
+    if (isImageFile({ type, name }) && !isVideoFile({ type, name })) {
+      const thumb = document.createElement('img');
+      thumb.className = 'shared-thumb';
+      thumb.src = url;
+      thumb.alt = name;
+      thumb.loading = 'lazy';
+      thumb.onerror = () => {
+        btn.textContent = '▤';
+      };
+      btn.replaceChildren(thumb);
     }
     btn.onclick = () => openLightbox(url, type, name, id);
   });
 }
 
 export function openLightbox(url, mimeType, fileName, attachmentId) {
-  const isVideo = mimeType?.startsWith('video/');
+  const isVideo = isVideoFile({ type: mimeType, name: fileName });
   openModal(`
     <div class="lightbox-wrap">
       ${isVideo
@@ -614,6 +636,35 @@ function openMessageMenu(msg, chat, anchorRect) {
   });
 }
 
+function buildDownloadCard(id, name, size = '') {
+  const card = document.createElement('div');
+  card.className = 'attachment-card';
+  card.innerHTML = `
+    <span class="file-symbol" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+    <span class="file-info">
+      <span class="file-name">${esc(name)}</span><br>
+      <span class="file-size">${esc(size || 'Tap Download to open')}</span>
+    </span>
+    <button class="download-btn" type="button" data-download="${esc(id)}" data-filename="${esc(name)}">Download</button>
+  `;
+  const btn = card.querySelector('[data-download]');
+  if (btn) {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        await api.downloadAttachment(id, name);
+      } catch (error) {
+        showToast(error.message || 'Download failed');
+      } finally {
+        btn.disabled = false;
+      }
+    };
+  }
+  return card;
+}
+
+let activeChatAudio = null;
+
 function isSameCluster(a, b) {
   if (!a || !b || a.deletedAt || b.deletedAt) return false;
   if (a.from !== b.from) return false;
@@ -674,21 +725,43 @@ export function renderMessages({ preserveScroll = false, forceBottom = false } =
       if (m.file) {
         if (m.file.isViewOnce) {
           if (mine) {
-            mediaHtml = `<div class="view-once-card sent"><span>1×</span><div><strong>View-once ${m.file.type?.startsWith('video/') ? 'video' : m.file.type?.startsWith('image/') ? 'photo' : 'file'}</strong><small>${m.file.downloaded ? 'Opened by recipient' : 'Sent · waiting to open'}</small></div></div>`;
+            mediaHtml = `<div class="view-once-card sent"><span>1×</span><div><strong>View-once ${isVideoFile(m.file) ? 'video' : isImageFile(m.file) ? 'photo' : isAudioFile(m.file) ? 'voice note' : 'file'}</strong><small>${m.file.downloaded ? 'Opened by recipient' : 'Sent · waiting to open'}</small></div></div>`;
           } else if (m.file.downloaded) {
             mediaHtml = `<div class="view-once-card opened"><span>1×</span><div><strong>Opened</strong><small>View-once media removed</small></div></div>`;
           } else {
             mediaHtml = `<button type="button" class="view-once-card incoming" data-open-vo="${esc(m.id)}"><span>1×</span><div><strong>Tap to view once</strong><small>${esc(m.file.name)} · ${esc(m.file.size)}</small></div></button>`;
           }
-        } else if (m.file.type?.startsWith('image/') || m.file.type?.startsWith('video/')) {
+        } else if (isAudioFile(m.file)) {
+          mediaHtml = `
+            <div class="audio-msg-card" data-audio-id="${esc(m.file.id)}" data-audio-name="${esc(m.file.name)}" data-audio-size="${esc(m.file.size)}">
+              <button type="button" class="audio-play-btn" aria-label="Play voice message" disabled>
+                <svg class="ico-play" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+                <svg class="ico-pause hidden" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+              </button>
+              <div class="audio-wave-col">
+                <input type="range" class="audio-seek" min="0" max="100" value="0" aria-label="Seek voice message" disabled>
+                <div class="audio-meta-row">
+                  <span class="audio-clock">0:00</span>
+                  <span class="audio-size">${esc(m.file.size)}</span>
+                </div>
+              </div>
+              <button class="audio-dl-btn" type="button" data-download="${esc(m.file.id)}" data-filename="${esc(m.file.name)}" title="Download audio" aria-label="Download audio">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+              </button>
+              <audio preload="metadata"></audio>
+            </div>
+          `;
+        } else if (isImageFile(m.file) || isVideoFile(m.file)) {
+          const isVid = isVideoFile(m.file);
+          const isHeic = isHeicFile(m.file);
           const cached = state.mediaUrlCache.get(m.file.id);
           const url = cached && cached.expiresAt > Date.now() ? cached.url : '';
-          if (url) {
-            mediaHtml = m.file.type.startsWith('video/')
-              ? `<video class="attachment-video" src="${esc(url)}" controls preload="metadata" playsinline></video>`
-              : `<img class="attachment-image clickable-media" src="${esc(url)}" alt="${esc(m.file.name)}" data-lightbox-id="${esc(m.file.id)}" data-lightbox-type="${esc(m.file.type)}" data-lightbox-name="${esc(m.file.name)}">`;
+          if (url && !isHeic) {
+            mediaHtml = isVid
+              ? `<video class="attachment-video" src="${esc(url)}" controls preload="metadata" playsinline data-media-fallback-id="${esc(m.file.id)}" data-media-fallback-name="${esc(m.file.name)}" data-media-fallback-size="${esc(m.file.size)}"></video>`
+              : `<img class="attachment-image clickable-media" src="${esc(url)}" alt="${esc(m.file.name)}" data-lightbox-id="${esc(m.file.id)}" data-lightbox-type="${esc(m.file.type)}" data-lightbox-name="${esc(m.file.name)}" data-media-fallback-id="${esc(m.file.id)}" data-media-fallback-name="${esc(m.file.name)}" data-media-fallback-size="${esc(m.file.size)}">`;
           } else {
-            mediaHtml = `<div class="media-slot" data-media-id="${esc(m.file.id)}" data-media-type="${esc(m.file.type)}" data-media-name="${esc(m.file.name)}">Loading ${m.file.type.startsWith('video/') ? 'video' : 'photo'}…</div>`;
+            mediaHtml = `<div class="media-slot" data-media-id="${esc(m.file.id)}" data-media-type="${esc(m.file.type)}" data-media-name="${esc(m.file.name)}" data-media-size="${esc(m.file.size)}">${isHeic ? 'Converting HEIC photo…' : `Loading ${isVid ? 'video' : 'photo'}…`}</div>`;
           }
         } else {
           mediaHtml = `
@@ -732,26 +805,130 @@ export function renderMessages({ preserveScroll = false, forceBottom = false } =
 
   box.innerHTML = chunks.join('');
 
+  box.querySelectorAll('[data-media-fallback-id]').forEach((el) => {
+    el.onerror = () => {
+      if (!el.isConnected) return;
+      el.replaceWith(
+        buildDownloadCard(
+          el.dataset.mediaFallbackId,
+          el.dataset.mediaFallbackName || 'Attachment',
+          el.dataset.mediaFallbackSize || '',
+        ),
+      );
+    };
+  });
+
   box.querySelectorAll('[data-media-id]').forEach(async (slot) => {
     const id = slot.dataset.mediaId;
     const type = slot.dataset.mediaType;
     const name = slot.dataset.mediaName;
-    const url = await api.getAttachmentUrl(id);
+    const size = slot.dataset.mediaSize || '';
+    const signedUrl = await api.getAttachmentUrl(id);
     if (!slot.isConnected) return;
-    if (!url) {
-      slot.textContent = `${name} (unavailable)`;
+    if (!signedUrl) {
+      slot.replaceWith(buildDownloadCard(id, name, size));
       return;
     }
-    if (type.startsWith('video/')) {
-      slot.outerHTML = `<video class="attachment-video" src="${esc(url)}" controls preload="metadata" playsinline></video>`;
-    } else {
-      const img = document.createElement('img');
-      img.className = 'attachment-image clickable-media';
-      img.src = url;
-      img.alt = name;
-      img.onclick = () => openLightbox(url, type, name, id);
-      slot.replaceWith(img);
+    if (isVideoFile({ type, name })) {
+      const video = document.createElement('video');
+      video.className = 'attachment-video';
+      video.src = signedUrl;
+      video.controls = true;
+      video.preload = 'metadata';
+      video.playsInline = true;
+      video.onerror = () => {
+        if (video.isConnected) video.replaceWith(buildDownloadCard(id, name, size));
+      };
+      slot.replaceWith(video);
+      return;
     }
+    let displayUrl = signedUrl;
+    if (isHeicFile({ type, name })) {
+      const converted = await resolveHeicPreviewUrl(id, signedUrl);
+      if (!slot.isConnected) return;
+      if (converted) {
+        displayUrl = converted;
+      } else {
+        slot.replaceWith(buildDownloadCard(id, name, size));
+        return;
+      }
+    }
+    const img = document.createElement('img');
+    img.className = 'attachment-image clickable-media';
+    img.src = displayUrl;
+    img.alt = name;
+    img.onerror = () => {
+      if (img.isConnected) img.replaceWith(buildDownloadCard(id, name, size));
+    };
+    img.onclick = () => openLightbox(displayUrl, type, name, id);
+    slot.replaceWith(img);
+  });
+
+  box.querySelectorAll('[data-audio-id]').forEach(async (card) => {
+    const id = card.dataset.audioId;
+    const playBtn = card.querySelector('.audio-play-btn');
+    const seek = card.querySelector('.audio-seek');
+    const clock = card.querySelector('.audio-clock');
+    const audio = card.querySelector('audio');
+    if (!id || !playBtn || !seek || !clock || !audio) return;
+
+    const url = await api.getAttachmentUrl(id);
+    if (!card.isConnected) return;
+    if (!url) {
+      clock.textContent = 'Unavailable';
+      return;
+    }
+    audio.src = url;
+    playBtn.disabled = false;
+    seek.disabled = false;
+
+    const syncIcons = (playing) => {
+      playBtn.querySelector('.ico-play')?.classList.toggle('hidden', playing);
+      playBtn.querySelector('.ico-pause')?.classList.toggle('hidden', !playing);
+    };
+
+    audio.addEventListener('loadedmetadata', () => {
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        clock.textContent = formatAudioClock(audio.duration);
+      }
+    });
+    audio.addEventListener('timeupdate', () => {
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        seek.value = String(Math.round((audio.currentTime / audio.duration) * 100));
+        clock.textContent = `${formatAudioClock(audio.currentTime)} / ${formatAudioClock(audio.duration)}`;
+      } else {
+        clock.textContent = formatAudioClock(audio.currentTime);
+      }
+    });
+    audio.addEventListener('pause', () => syncIcons(false));
+    audio.addEventListener('play', () => {
+      if (activeChatAudio && activeChatAudio !== audio) {
+        activeChatAudio.pause();
+      }
+      activeChatAudio = audio;
+      syncIcons(true);
+    });
+    audio.addEventListener('ended', () => {
+      syncIcons(false);
+      seek.value = '0';
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        clock.textContent = formatAudioClock(audio.duration);
+      }
+    });
+
+    playBtn.onclick = () => {
+      haptic(8);
+      if (audio.paused) {
+        audio.play().catch(() => showToast('Could not play voice message'));
+      } else {
+        audio.pause();
+      }
+    };
+    seek.oninput = () => {
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        audio.currentTime = (Number(seek.value) / 100) * audio.duration;
+      }
+    };
   });
 
   box.querySelectorAll('[data-lightbox-id]').forEach((img) => {
@@ -1048,8 +1225,8 @@ export function renderAttachmentPreview() {
     <div class="att-strip" role="list">
       ${list.map((att) => {
         const { id, file, previewUrl, isViewOnce } = att;
-        const isImg = Boolean(file.type?.startsWith('image/') && previewUrl);
-        const isVid = Boolean(file.type?.startsWith('video/') && previewUrl);
+        const isImg = Boolean(isImageFile(file) && previewUrl);
+        const isVid = Boolean(isVideoFile(file) && previewUrl);
         const isVisual = isImg || isVid;
         const mediaHtml = isImg
           ? `<img class="att-card-media" src="${esc(previewUrl)}" alt="${esc(file.name)}">`
