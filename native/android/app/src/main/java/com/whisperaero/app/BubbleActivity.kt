@@ -12,6 +12,8 @@ import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.MediaStore
+import android.provider.Settings
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
@@ -41,7 +43,25 @@ class BubbleActivity : AppCompatActivity() {
     ) { result ->
         val callback = filePathCallback ?: return@registerForActivityResult
         filePathCallback = null
-        val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+        val data = result.data
+        if (result.resultCode != RESULT_OK || data == null) {
+            callback.onReceiveValue(null)
+            return@registerForActivityResult
+        }
+        val list = mutableListOf<Uri>()
+        val clip = data.clipData
+        if (clip != null && clip.itemCount > 0) {
+            for (i in 0 until clip.itemCount) {
+                clip.getItemAt(i)?.uri?.let { list.add(it) }
+            }
+        } else {
+            data.data?.let { list.add(it) }
+        }
+        val uris = if (list.isNotEmpty()) {
+            list.toTypedArray()
+        } else {
+            WebChromeClient.FileChooserParams.parseResult(result.resultCode, data)
+        }
         callback.onReceiveValue(uris)
     }
 
@@ -138,16 +158,52 @@ class BubbleActivity : AppCompatActivity() {
             ): Boolean {
                 filePathCallback?.onReceiveValue(null)
                 filePathCallback = callback
-                return try {
-                    val chooser = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                val acceptTypes = fileChooserParams?.acceptTypes?.joinToString(",")?.lowercase().orEmpty()
+                val wantsMedia = acceptTypes.contains("image/") || acceptTypes.contains("video/")
+                val allowMultiple = fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE
+
+                val primaryIntent = if (wantsMedia) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        Intent(MediaStore.ACTION_PICK_IMAGES).apply {
+                            if (allowMultiple) {
+                                putExtra(
+                                    MediaStore.EXTRA_PICK_IMAGES_MAX,
+                                    MediaStore.getPickImagesMaxLimit().coerceAtMost(20),
+                                )
+                            }
+                        }
+                    } else {
+                        Intent(Intent.ACTION_GET_CONTENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, allowMultiple)
+                        }
+                    }
+                } else {
+                    Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
                         type = "*/*"
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, allowMultiple)
                     }
-                    filePickerLauncher.launch(chooser)
+                }
+
+                return try {
+                    filePickerLauncher.launch(primaryIntent)
                     true
                 } catch (_: Exception) {
-                    filePathCallback = null
-                    false
+                    try {
+                        val fallback = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, allowMultiple)
+                        }
+                        filePickerLauncher.launch(fallback)
+                        true
+                    } catch (_: Exception) {
+                        filePathCallback = null
+                        false
+                    }
                 }
             }
         }
@@ -197,7 +253,56 @@ class BubbleActivity : AppCompatActivity() {
         fun isBubble(): Boolean = true
 
         @JavascriptInterface
+        fun getBubbleChatId(): String = activeChatId
+
+        @JavascriptInterface
         fun getPlatform(): String = "android"
+
+        @JavascriptInterface
+        fun getStoredSession(): String {
+            return SessionStore.getSessionJson(this@BubbleActivity)
+        }
+
+        @JavascriptInterface
+        fun syncSession(json: String?) {
+            if (json.isNullOrBlank()) return
+            SessionStore.saveFromJson(this@BubbleActivity, json)
+        }
+
+        @JavascriptInterface
+        fun openBubbleSettings() {
+            runOnUiThread {
+                try {
+                    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        Intent(Settings.ACTION_APP_NOTIFICATION_BUBBLE_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                    } else {
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+                    }
+                    startActivity(intent)
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun openChatBubble(conversationId: String?, title: String?, iconUrl: String?): Boolean {
+            val id = conversationId?.trim().orEmpty()
+            if (id.isEmpty()) return false
+            val opened = NotificationHelper.openChatAsBubble(
+                this@BubbleActivity,
+                conversationId = id,
+                title = title ?: "Whisper",
+                iconUrl = iconUrl ?: "",
+            )
+            if (!opened) {
+                openBubbleSettings()
+            }
+            return opened
+        }
 
         @JavascriptInterface
         fun clearNotification(conversationId: String?) {

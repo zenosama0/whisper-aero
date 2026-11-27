@@ -1,8 +1,9 @@
 import { config, configured, supabase } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=25';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=26';
 import {
   clearNativeSession,
+  getNativeStoredSession,
   isBubbleWindow,
   isNativeAndroid,
   isNativeApp,
@@ -12,7 +13,7 @@ import {
   startNativeGoogleSignIn,
   syncNativeSession,
   syncNativeTheme,
-} from './native.js?v=25';
+} from './native.js?v=26';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import { getActiveChat, getChat, resetState, state, upsertMessage } from './state.js';
 import {
@@ -67,15 +68,21 @@ let pendingChatId = new URLSearchParams(window.location.search).get('chat') || '
 let closingModalFromPop = false;
 let isRecoveryFlow = window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery');
 let activeUserId = null;
+let enteringUserId = null;
 let refreshPromise = null;
 let resumePromise = null;
 let lastResumeSyncAt = 0;
 let pendingSharedText = '';
 const typingTimers = new Map();
 
+const bootSplash = $('#boot-splash');
 const authGate = $('#auth-gate');
 const appShell = $('.app-shell');
 const authMessage = $('#auth-message');
+
+function hideBootSplash() {
+  bootSplash?.classList.add('hidden');
+}
 
 const MOON_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/></svg>';
 const SUN_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>';
@@ -304,6 +311,7 @@ function authNotice(message, isError = false) {
 }
 
 function showAuth(mode = 'login') {
+  hideBootSplash();
   authMode = mode;
   document.body.classList.remove('authenticated');
   appShell.style.display = 'none';
@@ -409,6 +417,7 @@ async function pushNativeSession(providedSession = null) {
         peerId: c.peerId || '',
         name: c.name || 'Whisper',
         avatar: c.avatar || '',
+        avatarPath: c.avatarPath || '',
         muted: Boolean(c.muted),
       })),
     });
@@ -444,7 +453,7 @@ async function resumeSync({ forceChatId = '' } = {}) {
   if (resumePromise) {
     await resumePromise;
     if (forceChatId) {
-      if (getChat(forceChatId)) await selectChat(forceChatId, { forceSync: true });
+      if (getChat(forceChatId)) await selectChat(forceChatId, { forceSync: true, allowInBubble: true });
       else pendingChatId = forceChatId;
     }
     return;
@@ -460,7 +469,7 @@ async function resumeSync({ forceChatId = '' } = {}) {
       if (forceChatId) {
         closeWorkspacePanel(true);
         closeDetailsPanel(true);
-        if (getChat(forceChatId)) await selectChat(forceChatId, { forceSync: true });
+        if (getChat(forceChatId)) await selectChat(forceChatId, { forceSync: true, allowInBubble: true });
         else pendingChatId = forceChatId;
       } else if (state.activeChatId) {
         await syncChatMessages(state.activeChatId);
@@ -704,7 +713,8 @@ function handleRemoteTyping(conversationId, _peerId, isTyping) {
 }
 
 async function enterCloud(user) {
-  if (!user?.id || user.id === activeUserId) return;
+  if (!user?.id || user.id === activeUserId || user.id === enteringUserId) return;
+  enteringUserId = user.id;
   try {
     const mfaStatus = await api.getMfaStatus();
     if (mfaStatus.nextLevel === 'aal2' && mfaStatus.currentLevel !== 'aal2' && mfaStatus.totpFactors.length) {
@@ -725,6 +735,7 @@ async function enterCloud(user) {
       avatar: profileData.avatar || '',
     };
     updateUserBadge();
+    hideBootSplash();
     authGate.classList.add('hidden');
     appShell.style.display = 'flex';
     document.body.classList.add('authenticated');
@@ -735,9 +746,11 @@ async function enterCloud(user) {
       const targetId = pendingChatId;
       pendingChatId = '';
       if (getChat(targetId)) {
-        await selectChat(targetId);
+        await selectChat(targetId, { allowInBubble: true });
       }
-      history.replaceState(null, '', window.location.pathname);
+      if (!isBubbleWindow()) {
+        history.replaceState(null, '', window.location.pathname);
+      }
     }
     if (!isNativeApp() && 'Notification' in window && Notification.permission === 'granted') {
       api.registerWebPush().catch(() => {});
@@ -748,6 +761,8 @@ async function enterCloud(user) {
     activeUserId = null;
     showAuth('login');
     authNotice(error.message || 'Your account profile could not be loaded.', true);
+  } finally {
+    if (enteringUserId === user.id) enteringUserId = null;
   }
 }
 
@@ -769,10 +784,10 @@ async function handleSendText() {
   const c = getActiveChat();
   const input = $('#message-input');
   const txt = replaceEmojiShortcodes(input?.value.trim() || '');
-  const pending = state.pendingAttachment;
-  if (!c || (!txt && !pending)) return;
+  const pendingList = [...(state.pendingAttachments || [])];
+  if (!c || (!txt && !pendingList.length)) return;
 
-  if (state.editingMessage && !pending) {
+  if (state.editingMessage && !pendingList.length) {
     const targetId = state.editingMessage.id;
     clearComposeContext();
     input.value = '';
@@ -793,27 +808,39 @@ async function handleSendText() {
   input.focus({ preventScroll: true });
   sendTypingSignal(c.id, state.user.id, false);
 
-  if (pending?.file) {
-    const fileToSend = pending.file;
-    const isViewOnce = Boolean(pending.isViewOnce);
+  if (pendingList.length) {
     clearPendingAttachment();
-    showToast(isViewOnce ? 'Sending view-once media…' : 'Uploading attachment…');
-    try {
-      await api.sendAttachment({
-        conversationId: c.id,
-        file: fileToSend,
-        caption: txt,
-        replyToId: replyTo?.id || null,
-        viewOnce: isViewOnce,
-      });
+    showToast(
+      pendingList.length > 1
+        ? `Uploading ${pendingList.length} attachments…`
+        : (pendingList[0].isViewOnce ? 'Sending view-once media…' : 'Uploading attachment…'),
+    );
+    let sentCount = 0;
+    let lastBody = '';
+    for (let i = 0; i < pendingList.length; i++) {
+      const item = pendingList[i];
+      const isViewOnce = Boolean(item.isViewOnce);
+      try {
+        await api.sendAttachment({
+          conversationId: c.id,
+          file: item.file,
+          caption: i === 0 ? txt : '',
+          replyToId: i === 0 ? (replyTo?.id || null) : null,
+          viewOnce: isViewOnce,
+        });
+        sentCount++;
+        lastBody = isViewOnce ? 'Sent a view-once attachment' : `Sent ${item.file.name}`;
+      } catch (error) {
+        showToast(error.message || `Could not upload ${item.file.name}`);
+      }
+    }
+    if (sentCount > 0) {
       api.triggerPushNotification({
         conversationId: c.id,
         title: state.user.name || state.user.username,
-        body: isViewOnce ? 'Sent a view-once attachment' : `Sent ${fileToSend.name}`,
+        body: sentCount > 1 ? `Sent ${sentCount} attachments` : lastBody,
         tag: `whisper-msg-${c.id}`,
       });
-    } catch (error) {
-      showToast(error.message || 'Could not upload attachment');
     }
     return;
   }
@@ -1056,22 +1083,127 @@ function wireEvents() {
     }
   };
 
-  function stageAttachmentFile(file) {
+  function stageAttachmentFiles(fileList) {
     const c = getActiveChat();
-    if (!file || !c) return;
-    if (file.size > 10 * 1024 * 1024) {
-      showToast('Attachments must be 10 MB or smaller');
+    const files = [...(fileList || [])].filter(Boolean);
+    if (!files.length || !c) return;
+    if (!Array.isArray(state.pendingAttachments)) state.pendingAttachments = [];
+
+    let skippedSize = 0;
+    let added = 0;
+    for (const file of files) {
+      if (state.pendingAttachments.length >= 12) {
+        showToast('You can queue up to 12 attachments at once');
+        break;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        skippedSize++;
+        continue;
+      }
+      const previewUrl = (file.type?.startsWith('image/') || file.type?.startsWith('video/'))
+        ? URL.createObjectURL(file)
+        : '';
+      state.pendingAttachments.push({
+        id: crypto.randomUUID(),
+        file,
+        previewUrl,
+        isViewOnce: false,
+      });
+      added++;
+    }
+    if (skippedSize) {
+      showToast(skippedSize === 1 ? 'Skipped a file larger than 10 MB' : `Skipped ${skippedSize} files larger than 10 MB`);
+    }
+    if (added) {
+      renderAttachmentPreview();
+      $('#message-input')?.focus({ preventScroll: true });
+    }
+  }
+
+  function closeAttachMenu(fromPop = false) {
+    const existing = document.querySelector('.attach-picker-backdrop');
+    if (!existing) return;
+    existing.remove();
+    if (!fromPop) popUiLayer();
+  }
+
+  function openAttachMenu(anchorEl) {
+    if (document.querySelector('.attach-picker-backdrop')) {
+      closeAttachMenu();
       return;
     }
-    if (state.pendingAttachment?.previewUrl) {
-      URL.revokeObjectURL(state.pendingAttachment.previewUrl);
-    }
-    const previewUrl = (file.type?.startsWith('image/') || file.type?.startsWith('video/'))
-      ? URL.createObjectURL(file)
-      : '';
-    state.pendingAttachment = { file, previewUrl, isViewOnce: false };
-    renderAttachmentPreview();
-    $('#message-input')?.focus({ preventScroll: true });
+    if (!getActiveChat()) return;
+
+    const wasFocused = document.activeElement === $('#message-input');
+    const restoreFocus = () => {
+      if (wasFocused && document.activeElement !== $('#message-input')) {
+        $('#message-input')?.focus({ preventScroll: true });
+      }
+    };
+
+    pushUiLayer('attach');
+    const backdrop = document.createElement('div');
+    backdrop.className = 'attach-picker-backdrop';
+    backdrop.addEventListener('pointerdown', (e) => e.preventDefault());
+    backdrop.addEventListener('mousedown', (e) => e.preventDefault());
+
+    const pop = document.createElement('div');
+    pop.className = 'attach-picker-pop';
+    pop.setAttribute('role', 'menu');
+    pop.addEventListener('pointerdown', (e) => e.preventDefault());
+    pop.addEventListener('mousedown', (e) => e.preventDefault());
+    pop.innerHTML = `
+      <button type="button" class="attach-opt-btn" data-attach-kind="media" role="menuitem">
+        <span class="attach-opt-ico media" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+        </span>
+        <span class="attach-opt-label">Photos &amp; videos</span>
+      </button>
+      <button type="button" class="attach-opt-btn" data-attach-kind="files" role="menuitem">
+        <span class="attach-opt-ico files" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" x2="16" y1="13" y2="13"/><line x1="8" x2="16" y1="17" y2="17"/></svg>
+        </span>
+        <span class="attach-opt-label">Files</span>
+      </button>
+    `;
+    backdrop.append(pop);
+    document.body.append(backdrop);
+
+    const anchor = anchorEl?.getBoundingClientRect?.() || { left: 16, top: window.innerHeight - 64 };
+    const popRect = pop.getBoundingClientRect();
+    const top = Math.max(12, Math.round(anchor.top - popRect.height - 10));
+    const left = Math.max(10, Math.min(window.innerWidth - popRect.width - 10, Math.round(anchor.left)));
+    pop.style.top = `${top}px`;
+    pop.style.left = `${left}px`;
+
+    let dismissed = false;
+    const dismiss = (e) => {
+      if (e.target !== backdrop || dismissed) return;
+      dismissed = true;
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+      closeAttachMenu();
+      restoreFocus();
+    };
+    backdrop.addEventListener('touchend', dismiss, { passive: false });
+    backdrop.addEventListener('click', dismiss);
+
+    pop.querySelectorAll('[data-attach-kind]').forEach((btn) => {
+      let ran = false;
+      const triggerPick = (e) => {
+        if (ran) return;
+        ran = true;
+        if (e.cancelable) e.preventDefault();
+        e.stopPropagation();
+        const kind = btn.dataset.attachKind;
+        haptic(8);
+        closeAttachMenu();
+        if (kind === 'media') $('#media-input')?.click();
+        else $('#file-input')?.click();
+      };
+      btn.addEventListener('touchend', triggerPick, { passive: false });
+      btn.addEventListener('click', triggerPick);
+    });
   }
 
   const sendBtn = $('.send-btn');
@@ -1112,21 +1244,48 @@ function wireEvents() {
 
   $('#message-input').addEventListener('paste', (e) => {
     const items = [...(e.clipboardData?.items || [])];
-    const fileItem = items.find((it) => it.kind === 'file');
-    const rawFile = fileItem?.getAsFile() || e.clipboardData?.files?.[0];
-    if (!rawFile) return;
+    const files = items
+      .filter((it) => it.kind === 'file')
+      .map((it) => it.getAsFile())
+      .filter(Boolean);
+    const list = files.length ? files : [...(e.clipboardData?.files || [])];
+    if (!list.length) return;
     e.preventDefault();
-    const ext = (rawFile.type?.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
-    const file = rawFile.name && rawFile.name !== 'image.png'
-      ? rawFile
-      : new File([rawFile], `pasted-${Date.now()}.${ext}`, { type: rawFile.type || 'image/png' });
-    stageAttachmentFile(file);
+    const normalized = list.map((rawFile, idx) => {
+      const ext = (rawFile.type?.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+      return rawFile.name && rawFile.name !== 'image.png'
+        ? rawFile
+        : new File([rawFile], `pasted-${Date.now()}-${idx}.${ext}`, { type: rawFile.type || 'image/png' });
+    });
+    stageAttachmentFiles(normalized);
   });
 
-  $('#attach-btn').onclick = () => $('#file-input').click();
+  const attachBtn = $('#attach-btn');
+  if (attachBtn) {
+    let lastAttachTap = 0;
+    const toggleAttach = (e) => {
+      const now = Date.now();
+      if (e.type === 'touchend') {
+        if (e.cancelable) e.preventDefault();
+        lastAttachTap = now;
+      } else if (now - lastAttachTap < 450) {
+        return;
+      }
+      e.stopPropagation();
+      openAttachMenu(attachBtn);
+    };
+    attachBtn.addEventListener('pointerdown', (e) => e.preventDefault());
+    attachBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    attachBtn.addEventListener('touchend', toggleAttach, { passive: false });
+    attachBtn.addEventListener('click', toggleAttach);
+  }
+
+  $('#media-input')?.addEventListener('change', (event) => {
+    if (event.target.files?.length) stageAttachmentFiles(event.target.files);
+    event.target.value = '';
+  });
   $('#file-input').onchange = (event) => {
-    const file = event.target.files[0];
-    if (file) stageAttachmentFile(file);
+    if (event.target.files?.length) stageAttachmentFiles(event.target.files);
     event.target.value = '';
   };
 
@@ -1517,6 +1676,10 @@ function wireEvents() {
       closeAvatarLightbox(true);
       return;
     }
+    if (document.querySelector('.attach-picker-backdrop')) {
+      document.querySelector('.attach-picker-backdrop')?.remove();
+      return;
+    }
     if (document.querySelector('.chat-more-backdrop')) {
       closeChatMoreMenu(true);
       return;
@@ -1604,6 +1767,11 @@ function wireEvents() {
       closeAvatarLightbox();
       return true;
     }
+    if (document.querySelector('.attach-picker-backdrop')) {
+      document.querySelector('.attach-picker-backdrop')?.remove();
+      popUiLayer();
+      return true;
+    }
     if (document.querySelector('.chat-more-backdrop')) {
       closeChatMoreMenu();
       return true;
@@ -1657,13 +1825,13 @@ async function bootstrap() {
   wireEvents();
 
   if (!configured) {
-    authNotice('Supabase configuration is missing in app-config.js.', true);
     showAuth('login');
+    authNotice('Supabase configuration is missing in app-config.js.', true);
     return;
   }
 
   appShell.style.display = 'none';
-  showAuth(isRecoveryFlow ? 'recovery' : 'login');
+  authGate.classList.add('hidden');
 
   api.onAuthStateChange((event, session) => {
     if (event === 'PASSWORD_RECOVERY') {
@@ -1673,6 +1841,7 @@ async function bootstrap() {
       stopRealtime();
       clearNativeSession();
       activeUserId = null;
+      enteringUserId = null;
       isRecoveryFlow = false;
       resetState();
       showAuth('login');
@@ -1689,12 +1858,23 @@ async function bootstrap() {
   try {
     const { data, error } = await api.getSession();
     if (error) throw error;
+    let activeUser = data?.session?.user || null;
+    if (!activeUser && isNativeAndroid()) {
+      const stored = getNativeStoredSession();
+      if (stored?.accessToken && stored?.refreshToken) {
+        const restored = await api.setSessionTokens(stored.accessToken, stored.refreshToken).catch(() => null);
+        activeUser = restored?.data?.session?.user || restored?.data?.user || null;
+      }
+    }
     if (isRecoveryFlow) {
       showAuth('recovery');
-    } else if (data.session?.user) {
-      await enterCloud(data.session.user);
+    } else if (activeUser) {
+      await enterCloud(activeUser);
+    } else {
+      showAuth('login');
     }
   } catch (error) {
+    showAuth('login');
     authNotice(error.message || 'Could not connect to the account service.', true);
   }
 }

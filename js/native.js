@@ -22,17 +22,46 @@ export function startNativeGoogleSignIn(webClientId) {
   return false;
 }
 
+const INITIAL_BUBBLE_CHAT_ID = typeof window !== 'undefined'
+  ? (new URLSearchParams(window.location.search).get('chat') || '')
+  : '';
+
 export function isBubbleWindow() {
-  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('bubble') === '1';
+  return typeof window !== 'undefined' && (
+    Boolean(window.WhisperNative?.isBubble?.())
+    || new URLSearchParams(window.location.search).get('bubble') === '1'
+  );
+}
+
+export function getBubbleChatId() {
+  try {
+    const fromNative = window.WhisperNative?.getBubbleChatId?.();
+    if (fromNative) return String(fromNative);
+  } catch {
+    // Ignore
+  }
+  return INITIAL_BUBBLE_CHAT_ID;
+}
+
+export function getNativeStoredSession() {
+  try {
+    if (isNativeAndroid() && typeof window.WhisperNative.getStoredSession === 'function') {
+      const raw = window.WhisperNative.getStoredSession();
+      return raw ? JSON.parse(raw) : null;
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
 }
 
 export function getNativeCapabilities() {
   if (isNativeAndroid()) {
     try {
       const raw = window.WhisperNative.getCapabilities?.();
-      return raw ? JSON.parse(raw) : { platform: 'android', notificationsGranted: true, backgroundSyncEnabled: true, batteryOptimized: false, bubblesEnabled: true };
+      return raw ? JSON.parse(raw) : { platform: 'android', notificationsGranted: true, backgroundSyncEnabled: false, batteryOptimized: false, bubblesEnabled: true };
     } catch {
-      return { platform: 'android', notificationsGranted: true, backgroundSyncEnabled: true, batteryOptimized: false, bubblesEnabled: true };
+      return { platform: 'android', notificationsGranted: true, backgroundSyncEnabled: false, batteryOptimized: false, bubblesEnabled: true };
     }
   }
   if (isNativeWindows()) {

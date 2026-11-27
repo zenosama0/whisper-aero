@@ -26,11 +26,12 @@ import androidx.core.content.LocusIdCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONArray
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 data class BufferedMsgLine(
     val text: String,
@@ -38,7 +39,8 @@ data class BufferedMsgLine(
 )
 
 object NotificationHelper {
-    const val CHANNEL_MESSAGES = "whisper_messages"
+    const val CHANNEL_MESSAGES = "whisper_messages_v2"
+    private const val LEGACY_CHANNEL_MESSAGES = "whisper_messages"
     const val CHANNEL_CALLS = "whisper_calls"
     const val CHANNEL_SERVICE = "whisper_service"
     const val SERVICE_NOTIF_ID = 7001
@@ -50,10 +52,20 @@ object NotificationHelper {
     private val avatarCache = ConcurrentHashMap<String, Bitmap>()
     private val seenIds = LinkedHashSet<String>()
     private val ioPool = Executors.newCachedThreadPool()
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .build()
 
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        try {
+            nm.deleteNotificationChannel(LEGACY_CHANNEL_MESSAGES)
+        } catch (_: Exception) {
+        }
 
         val messages = NotificationChannel(
             CHANNEL_MESSAGES,
@@ -105,9 +117,7 @@ object NotificationHelper {
         ensureChannels(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (nm.bubblePreference == NotificationManager.BUBBLE_PREFERENCE_NONE) return false
-            val ch = nm.getNotificationChannel(CHANNEL_MESSAGES)
-            return ch?.canBubble() ?: true
+            return nm.bubblePreference != NotificationManager.BUBBLE_PREFERENCE_NONE
         }
         return true
     }
@@ -145,12 +155,13 @@ object NotificationHelper {
                     val name = item.optString("name", "Whisper").ifBlank { "Whisper" }
                     val avatar = item.optString("avatar", "")
                     if (id.isBlank()) continue
-                    val bmp = loadCircularAvatar(avatar) ?: buildFallbackAvatar(name)
-                    val icon = IconCompat.createWithAdaptiveBitmap(bmp)
+                    val (circular, adaptive) = loadAvatarBitmaps(context, avatar, id, name)
+                    val personIcon = IconCompat.createWithBitmap(circular)
+                    val adaptiveIcon = IconCompat.createWithAdaptiveBitmap(adaptive)
                     val person = Person.Builder()
                         .setName(name)
                         .setKey("chat_$id")
-                        .setIcon(icon)
+                        .setIcon(personIcon)
                         .setImportant(true)
                         .build()
                     val intent = Intent(context, MainActivity::class.java).apply {
@@ -162,7 +173,7 @@ object NotificationHelper {
                             .setShortLabel(name)
                             .setLongLabel(name)
                             .setLongLived(true)
-                            .setIcon(icon)
+                            .setIcon(adaptiveIcon)
                             .setPerson(person)
                             .setLocusId(LocusIdCompat("chat_$id"))
                             .setIntent(intent)
@@ -216,9 +227,7 @@ object NotificationHelper {
         val peerTitle = title.ifBlank { "Whisper" }
 
         ioPool.execute {
-            val largeIcon = loadCircularAvatar(iconUrl) ?: buildFallbackAvatar(peerTitle)
-            val personIcon = IconCompat.createWithBitmap(largeIcon)
-            val shortcutAvatar = IconCompat.createWithAdaptiveBitmap(largeIcon)
+            val (largeIcon, adaptiveSquare) = loadAvatarBitmaps(context, iconUrl, conversationId, peerTitle)
 
             val launchIntent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -251,6 +260,7 @@ object NotificationHelper {
                     conversationId = conversationId,
                     peerTitle = peerTitle,
                     largeIcon = largeIcon,
+                    adaptiveSquare = adaptiveSquare,
                     lines = lines,
                     notifId = notifId,
                     autoExpandBubble = false,
@@ -316,13 +326,14 @@ object NotificationHelper {
         conversationId: String,
         peerTitle: String,
         largeIcon: Bitmap,
+        adaptiveSquare: Bitmap,
         lines: List<BufferedMsgLine>,
         notifId: Int,
         autoExpandBubble: Boolean,
         suppressNotif: Boolean,
     ) {
         val personIcon = IconCompat.createWithBitmap(largeIcon)
-        val shortcutAvatar = IconCompat.createWithAdaptiveBitmap(largeIcon)
+        val shortcutAvatar = IconCompat.createWithAdaptiveBitmap(adaptiveSquare)
         val shortcutId = "chat_$conversationId"
 
         val senderPerson = Person.Builder()
@@ -409,7 +420,7 @@ object NotificationHelper {
         }
 
         ioPool.execute {
-            val largeIcon = loadCircularAvatar(iconUrl) ?: buildFallbackAvatar(peerTitle)
+            val (largeIcon, adaptiveSquare) = loadAvatarBitmaps(context, iconUrl, conversationId, peerTitle)
             val launchIntent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 putExtra(EXTRA_CHAT_ID, conversationId)
@@ -437,6 +448,7 @@ object NotificationHelper {
                 conversationId = conversationId,
                 peerTitle = peerTitle,
                 largeIcon = largeIcon,
+                adaptiveSquare = adaptiveSquare,
                 lines = lines,
                 notifId = notifId,
                 autoExpandBubble = true,
@@ -452,13 +464,16 @@ object NotificationHelper {
     }
 
     fun showTest(context: Context) {
-        val sampleId = SessionStore.getFirstChatId(context) ?: "whisper-preview"
+        val first = SessionStore.getFirstChat(context)
+        val sampleId = first?.first ?: "whisper-preview"
+        val peerName = first?.second?.name?.ifBlank { "Whisper Native" } ?: "Whisper Native"
+        val avatarUrl = first?.second?.avatar ?: ""
         show(
             context = context,
             conversationId = sampleId,
-            title = "Whisper Native",
+            title = peerName,
             body = "Notifications, Quick Reply & Chat Bubbles are active!",
-            iconUrl = "",
+            iconUrl = avatarUrl,
             tag = "whisper-test",
             messageId = "",
         )
@@ -472,7 +487,38 @@ object NotificationHelper {
         NotificationManagerCompat.from(context).cancel(conversationId.hashCode())
     }
 
-    private fun buildFallbackAvatar(name: String): Bitmap {
+    private fun loadAvatarBitmaps(
+        context: Context,
+        url: String,
+        conversationId: String,
+        fallbackName: String,
+    ): Pair<Bitmap, Bitmap> {
+        val raw = loadRawAvatarBitmap(context, url, conversationId)
+        return if (raw != null) {
+            toCircularBitmap(raw) to toSquareAdaptiveBitmap(raw)
+        } else {
+            buildFallbackCircularAvatar(fallbackName) to buildFallbackSquareAvatar(fallbackName)
+        }
+    }
+
+    private fun buildFallbackSquareAvatar(name: String): Bitmap {
+        val size = 192
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        canvas.drawColor(Color.parseColor("#66A7AA"))
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 76f
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
+        }
+        val letter = name.trim().take(1).uppercase().ifEmpty { "W" }
+        val y = size / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
+        canvas.drawText(letter, size / 2f, y, textPaint)
+        return bmp
+    }
+
+    private fun buildFallbackCircularAvatar(name: String): Bitmap {
         val size = 128
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
@@ -490,32 +536,65 @@ object NotificationHelper {
         return bmp
     }
 
-    private fun loadCircularAvatar(url: String): Bitmap? {
+    private fun centerCropSquare(src: Bitmap, targetSize: Int): Bitmap {
+        val side = minOf(src.width, src.height).coerceAtLeast(1)
+        val x = ((src.width - side) / 2).coerceAtLeast(0)
+        val y = ((src.height - side) / 2).coerceAtLeast(0)
+        val cropped = if (src.width == side && src.height == side) {
+            src
+        } else {
+            Bitmap.createBitmap(src, x, y, side, side)
+        }
+        return Bitmap.createScaledBitmap(cropped, targetSize, targetSize, true)
+    }
+
+    private fun toSquareAdaptiveBitmap(src: Bitmap): Bitmap = centerCropSquare(src, 192)
+
+    private fun toCircularBitmap(src: Bitmap): Bitmap {
+        val size = 128
+        val scaled = centerCropSquare(src, size)
+        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val rect = Rect(0, 0, size, size)
+        canvas.drawARGB(0, 0, 0, 0)
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+        canvas.drawBitmap(scaled, rect, rect, paint)
+        return output
+    }
+
+    private fun downloadBitmap(url: String): Bitmap? {
         if (!url.startsWith("https://") && !url.startsWith("http://")) return null
         avatarCache[url]?.let { return it }
         return try {
-            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 4000
-                readTimeout = 4000
-                doInput = true
-            }
-            conn.inputStream.use { stream ->
-                val bmp = BitmapFactory.decodeStream(stream) ?: return null
-                val size = 128
-                val scaled = Bitmap.createScaledBitmap(bmp, size, size, true)
-                val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-                val canvas = Canvas(output)
-                val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-                val rect = Rect(0, 0, size, size)
-                canvas.drawARGB(0, 0, 0, 0)
-                canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
-                paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
-                canvas.drawBitmap(scaled, rect, rect, paint)
-                avatarCache[url] = output
-                output
+            val req = Request.Builder().url(url).get().build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val bytes = resp.body?.bytes() ?: return null
+                val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+                avatarCache[url] = decoded
+                decoded
             }
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun loadRawAvatarBitmap(context: Context, url: String, conversationId: String): Bitmap? {
+        downloadBitmap(url)?.let { return it }
+        if (conversationId.isNotBlank()) {
+            val meta = SessionStore.getPeerMeta(context, conversationId)
+            if (meta.avatar.isNotBlank() && meta.avatar != url) {
+                downloadBitmap(meta.avatar)?.let { return it }
+            }
+            if (meta.avatarPath.isNotBlank()) {
+                val freshUrl = SessionStore.resolveFreshAvatarUrl(context, httpClient, meta.avatarPath)
+                if (!freshUrl.isNullOrBlank()) {
+                    downloadBitmap(freshUrl)?.let { return it }
+                }
+            }
+        }
+        return null
     }
 }

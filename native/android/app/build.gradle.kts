@@ -11,8 +11,8 @@ android {
         applicationId = "com.whisperaero.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = (System.getenv("VERSION_CODE")?.toIntOrNull() ?: 25)
-        versionName = (System.getenv("VERSION_NAME") ?: "2026.11.27.25")
+        versionCode = (System.getenv("VERSION_CODE")?.toIntOrNull() ?: 26)
+        versionName = (System.getenv("VERSION_NAME") ?: "2026.11.27.26")
     }
 
     signingConfigs {

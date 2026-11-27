@@ -16,21 +16,6 @@ const reply = (body: unknown, status = 200, headers: Record<string, string> = {}
     },
   });
 
-const SUPPORTED_MIME = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/gif",
-  "video/mp4",
-  "video/webm",
-  "video/quicktime",
-  "audio/mpeg",
-  "audio/webm",
-  "audio/ogg",
-  "application/pdf",
-  "text/plain",
-]);
-
 const MAX_BYTES = 10 * 1024 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -68,12 +53,10 @@ Deno.serve(async (request) => {
     if (!(file instanceof File) || !UUID_RE.test(conversationId)) {
       return reply({ error: "Choose a file and conversation." }, 400);
     }
-    if (!SUPPORTED_MIME.has(file.type)) {
-      return reply({ error: "This file type is not supported." }, 415);
-    }
     if (file.size < 1 || file.size > MAX_BYTES) {
       return reply({ error: "Attachments must be 10 MB or smaller." }, 413);
     }
+    const mimeType = (file.type || "application/octet-stream").trim().slice(0, 160) || "application/octet-stream";
 
     const { data: membership } = await admin
       .from("conversation_members")
@@ -89,7 +72,7 @@ Deno.serve(async (request) => {
     const objectPath = `${conversationId}/${attachmentId}`;
     const { error: uploadError } = await admin.storage
       .from("message-files")
-      .upload(objectPath, file, { contentType: file.type, upsert: false });
+      .upload(objectPath, file, { contentType: mimeType, upsert: false });
     if (uploadError) return reply({ error: uploadError.message }, 500);
 
     const { error: metadataError } = await admin.from("attachments").insert({
@@ -98,7 +81,7 @@ Deno.serve(async (request) => {
       uploader_id: user.id,
       object_path: objectPath,
       file_name: (file.name || "attachment").slice(0, 180),
-      mime_type: file.type,
+      mime_type: mimeType,
       size_bytes: file.size,
       is_view_once: isViewOnce,
     });

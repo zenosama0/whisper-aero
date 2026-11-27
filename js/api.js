@@ -165,6 +165,14 @@ export async function getSession() {
   return supabase.auth.getSession();
 }
 
+export async function setSessionTokens(accessToken, refreshToken) {
+  if (!accessToken || !refreshToken) return { data: { session: null, user: null }, error: null };
+  return supabase.auth.setSession({
+    access_token: accessToken,
+    refresh_token: refreshToken,
+  });
+}
+
 export function onAuthStateChange(callback) {
   return supabase.auth.onAuthStateChange(callback);
 }

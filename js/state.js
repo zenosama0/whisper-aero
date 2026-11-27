@@ -81,7 +81,7 @@ export const state = {
   typingChats: new Set(),
   replyingTo: null, // { id, senderName, text, fileName }
   editingMessage: null, // { id, conversationId, text }
-  pendingAttachment: null, // { file, previewUrl, isViewOnce }
+  pendingAttachments: [], // [{ id, file, previewUrl, isViewOnce }]
   chatSearch: { open: false, term: '', matchIds: [], activeIndex: 0 },
   filter: 'all',
   query: '',
@@ -174,10 +174,10 @@ export function resetState() {
   state.typingChats = new Set();
   state.replyingTo = null;
   state.editingMessage = null;
-  if (state.pendingAttachment?.previewUrl) {
-    URL.revokeObjectURL(state.pendingAttachment.previewUrl);
+  for (const item of state.pendingAttachments || []) {
+    if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
   }
-  state.pendingAttachment = null;
+  state.pendingAttachments = [];
   state.chatSearch = { open: false, term: '', matchIds: [], activeIndex: 0 };
   state.mediaUrlCache.clear();
   state.avatarUrlCache.clear();

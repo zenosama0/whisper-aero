@@ -1,6 +1,7 @@
 package com.whisperaero.app
 
 import android.content.Context
+import android.net.Uri
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -19,6 +20,7 @@ data class NativeSession(
 data class PeerMeta(
     val name: String,
     val avatar: String,
+    val avatarPath: String = "",
     val muted: Boolean = false,
 )
 
@@ -31,7 +33,7 @@ object SessionStore {
     private const val KEY_EXPIRES = "expires_at"
     private const val KEY_USER_ID = "user_id"
     private const val KEY_CHATS = "chats_json"
-    private const val KEY_BG_SYNC = "background_sync_enabled"
+    private const val KEY_BG_SYNC = "foreground_socket_enabled"
     private const val KEY_LAST_SEEN_ISO = "last_seen_iso"
 
     private val lock = Any()
@@ -61,6 +63,7 @@ object SessionStore {
                         JSONObject().apply {
                             put("name", item.optString("name", "Whisper"))
                             put("avatar", item.optString("avatar", ""))
+                            put("avatarPath", item.optString("avatarPath", ""))
                             put("muted", item.optBoolean("muted", false))
                         },
                     )
@@ -96,18 +99,28 @@ object SessionStore {
         }
     }
 
+    fun getSessionJson(context: Context): String {
+        val s = getSession(context) ?: return ""
+        return JSONObject()
+            .put("accessToken", s.accessToken)
+            .put("refreshToken", s.refreshToken)
+            .put("expiresAt", s.expiresAt)
+            .put("userId", s.userId)
+            .toString()
+    }
+
     fun hasSession(context: Context): Boolean = getSession(context) != null
 
     fun clear(context: Context) {
         synchronized(lock) {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val bg = prefs.getBoolean(KEY_BG_SYNC, true)
+            val bg = prefs.getBoolean(KEY_BG_SYNC, false)
             prefs.edit().clear().putBoolean(KEY_BG_SYNC, bg).apply()
         }
     }
 
     fun isBackgroundSyncEnabled(context: Context): Boolean {
-        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_BG_SYNC, true)
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_BG_SYNC, false)
     }
 
     fun setBackgroundSyncEnabled(context: Context, enabled: Boolean) {
@@ -137,6 +150,7 @@ object SessionStore {
                 PeerMeta(
                     obj.optString("name", "Whisper").ifBlank { "Whisper" },
                     obj.optString("avatar", ""),
+                    obj.optString("avatarPath", ""),
                     obj.optBoolean("muted", false),
                 )
             } catch (_: Exception) {
@@ -145,17 +159,57 @@ object SessionStore {
         }
     }
 
-    fun getFirstChatId(context: Context): String? {
+    fun getFirstChat(context: Context): Pair<String, PeerMeta>? {
         synchronized(lock) {
             val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_CHATS, null)
                 ?: return null
             return try {
                 val obj = JSONObject(raw)
                 val keys = obj.keys()
-                if (keys.hasNext()) keys.next() else null
+                if (!keys.hasNext()) return null
+                val id = keys.next()
+                val item = obj.optJSONObject(id) ?: return null
+                id to PeerMeta(
+                    item.optString("name", "Whisper").ifBlank { "Whisper" },
+                    item.optString("avatar", ""),
+                    item.optString("avatarPath", ""),
+                    item.optBoolean("muted", false),
+                )
             } catch (_: Exception) {
                 null
             }
+        }
+    }
+
+    fun getFirstChatId(context: Context): String? = getFirstChat(context)?.first
+
+    fun resolveFreshAvatarUrl(context: Context, client: OkHttpClient, avatarPath: String): String? {
+        val clean = avatarPath.trim().trimStart('/')
+        if (clean.isEmpty()) return null
+        val session = refreshAccessTokenIfNeeded(context, client) ?: return null
+        return try {
+            val encodedPath = Uri.encode(clean, "/")
+            val bodyJson = JSONObject().put("expiresIn", 3600).toString()
+            val req = Request.Builder()
+                .url("${session.supabaseUrl}/storage/v1/object/sign/profile-avatars/$encodedPath")
+                .addHeader("apikey", session.anonKey)
+                .addHeader("Authorization", "Bearer ${session.accessToken}")
+                .addHeader("Content-Type", "application/json")
+                .post(bodyJson.toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val signedPart = JSONObject(resp.body?.string() ?: "{}").optString("signedURL")
+                if (signedPart.isBlank()) return null
+                when {
+                    signedPart.startsWith("https://") || signedPart.startsWith("http://") -> signedPart
+                    signedPart.startsWith("/storage/v1") -> "${session.supabaseUrl}$signedPart"
+                    signedPart.startsWith("/") -> "${session.supabaseUrl}/storage/v1$signedPart"
+                    else -> "${session.supabaseUrl}/storage/v1/$signedPart"
+                }
+            }
+        } catch (_: Exception) {
+            null
         }
     }
 

@@ -35,7 +35,7 @@ class WhisperSyncWorker(
 
         fun schedule(context: Context) {
             val wm = WorkManager.getInstance(context)
-            if (!SessionStore.hasSession(context) || !SessionStore.isBackgroundSyncEnabled(context)) {
+            if (!SessionStore.hasSession(context)) {
                 wm.cancelUniqueWork(PERIODIC_WORK_NAME)
                 return
             }
@@ -55,7 +55,7 @@ class WhisperSyncWorker(
         }
 
         fun enqueueNow(context: Context) {
-            if (!SessionStore.hasSession(context) || !SessionStore.isBackgroundSyncEnabled(context)) return
+            if (!SessionStore.hasSession(context)) return
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build()
@@ -77,12 +77,9 @@ class WhisperSyncWorker(
     }
 
     override fun doWork(): Result {
-        if (!SessionStore.hasSession(applicationContext) || !SessionStore.isBackgroundSyncEnabled(applicationContext)) {
+        if (!SessionStore.hasSession(applicationContext)) {
             return Result.success()
         }
-
-        // Ensure persistent foreground Realtime listener service stays alive
-        WhisperSyncService.syncState(applicationContext)
 
         val session = SessionStore.refreshAccessTokenIfNeeded(applicationContext, http)
             ?: return Result.success()

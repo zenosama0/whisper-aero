@@ -2583,3 +2583,254 @@ body.dark .reaction-slot-btn.editing {
 .settings-emoji-grid {
   max-height: 196px;
 }
+
+/* Boot Splash Screen (prevents login screen flash before auth check finishes) */
+.boot-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: var(--bg, #eef6f8);
+  color: var(--ink, #1d2a29);
+}
+
+.boot-splash.hidden {
+  display: none !important;
+}
+
+.boot-splash-mark .brand-mark {
+  width: 54px;
+  height: 54px;
+  border-radius: 17px;
+  font-size: 28px;
+  box-shadow: 0 10px 24px rgba(56, 128, 114, 0.24);
+}
+
+.boot-splash-name {
+  font: 700 20px Manrope, sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.boot-splash-dots {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.boot-splash-dots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6aa795;
+  opacity: 0.35;
+  animation: bootDotPulse 1s ease-in-out infinite;
+}
+
+.boot-splash-dots span:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.boot-splash-dots span:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+@keyframes bootDotPulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+body.dark .boot-splash {
+  background: #17201e;
+  color: #e5eeeb;
+}
+
+/* Multi-attachment Preview Strip + Per-Attachment View-Once Toggle */
+.attachment-preview {
+  display: block;
+  padding: 8px 12px 6px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.att-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 2px 0;
+  scrollbar-width: thin;
+}
+
+.att-card {
+  position: relative;
+  flex: none;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.att-card.is-visual {
+  width: 76px;
+  height: 76px;
+}
+
+.att-card.is-file {
+  min-width: 146px;
+  max-width: 196px;
+  height: 76px;
+  display: flex;
+  align-items: center;
+  padding: 8px 26px 8px 10px;
+}
+
+.att-card-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.att-card-file {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.att-card-file-ico {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.att-card-file strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.att-card-file small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.att-card-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(16, 24, 23, 0.72);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.att-card-vo {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(18, 28, 27, 0.72);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+}
+
+.att-card-vo.active {
+  background: #4fa288;
+  border-color: #ffffff;
+  color: #ffffff;
+}
+
+/* Keyboard-safe Attach Picker Popover */
+.attach-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 420;
+  background: transparent;
+}
+
+.attach-picker-pop {
+  position: fixed;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 16px;
+  background: var(--panel, #ffffff);
+  border: 1px solid var(--line, #dbe5e2);
+  box-shadow: 0 12px 30px rgba(18, 30, 32, 0.22);
+}
+
+.attach-opt-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 92px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface, #f4f9f7);
+  color: var(--ink, #1d2a29);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.attach-opt-btn:hover {
+  background: rgba(111, 165, 145, 0.16);
+}
+
+.attach-opt-ico {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+
+.attach-opt-ico.media {
+  background: linear-gradient(135deg, #4b9c82, #387968);
+}
+
+.attach-opt-ico.files {
+  background: linear-gradient(135deg, #4e7cb2, #3a5d8a);
+}
+
+body.dark .attachment-preview {
+  background: #1d2826;
+  border-color: #34433f;
+}
+
+body.dark .att-card {
+  background: #263330;
+  border-color: #3d4d48;
+}
+
+body.dark .attach-picker-pop {
+  background: #202b29;
+  border-color: #34433f;
+}
+
+body.dark .attach-opt-btn {
+  background: #283633;
+  color: #e5eeeb;
+}

@@ -1,11 +1,13 @@
 import * as api from '../api.js';
 import {
   clearNativeNotification,
+  getBubbleChatId,
   isBubbleWindow,
   isNativeAndroid,
   nativeCopyText,
   nativeShareText,
-} from '../native.js?v=25';
+  openNativeChatBubble,
+} from '../native.js?v=26';
 import {
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,
@@ -187,9 +189,18 @@ export async function syncChatMessages(chatId, { reloadSharedMedia = false } = {
   }
 }
 
-export async function selectChat(chatId, { forceSync = false } = {}) {
+export async function selectChat(chatId, { forceSync = false, allowInBubble = false } = {}) {
   const c = getChat(chatId);
   if (!c) return;
+
+  if (!allowInBubble && isBubbleWindow() && isNativeAndroid()) {
+    const currentBubbleId = getBubbleChatId();
+    if (currentBubbleId && chatId !== currentBubbleId) {
+      const ok = openNativeChatBubble(c);
+      showToast(ok ? `Opened ${c.name} in a new bubble` : 'Enable Bubbles for Whisper in Android settings');
+      return;
+    }
+  }
 
   const changed = state.activeChatId !== chatId;
   state.activeChatId = chatId;
@@ -938,56 +949,80 @@ export function clearComposeContext() {
 export function renderAttachmentPreview() {
   const bar = $('#attachment-preview');
   if (!bar) return;
-  const att = state.pendingAttachment;
-  if (!att?.file) {
+  const list = state.pendingAttachments || [];
+  if (!list.length) {
     bar.classList.add('hidden');
     bar.innerHTML = '';
     return;
   }
 
-  const { file, previewUrl, isViewOnce } = att;
-  let thumbHtml = '<span class="att-prev-icon" aria-hidden="true">▤</span>';
-  if (file.type?.startsWith('image/') && previewUrl) {
-    thumbHtml = `<img class="att-prev-thumb" src="${esc(previewUrl)}" alt="${esc(file.name)}">`;
-  } else if (file.type?.startsWith('video/') && previewUrl) {
-    thumbHtml = `<video class="att-prev-thumb" src="${esc(previewUrl)}" muted playsinline></video>`;
-  }
-
   bar.classList.remove('hidden');
   bar.innerHTML = `
-    ${thumbHtml}
-    <div class="att-prev-meta">
-      <strong>${esc(file.name)}</strong>
-      <small>${esc(formatFileSize(file.size))}</small>
+    <div class="att-strip" role="list">
+      ${list.map((att) => {
+        const { id, file, previewUrl, isViewOnce } = att;
+        const isImg = Boolean(file.type?.startsWith('image/') && previewUrl);
+        const isVid = Boolean(file.type?.startsWith('video/') && previewUrl);
+        const isVisual = isImg || isVid;
+        const mediaHtml = isImg
+          ? `<img class="att-card-media" src="${esc(previewUrl)}" alt="${esc(file.name)}">`
+          : isVid
+            ? `<video class="att-card-media" src="${esc(previewUrl)}" muted playsinline></video>`
+            : `<div class="att-card-file"><span class="att-card-file-ico" aria-hidden="true">▤</span><strong>${esc(file.name)}</strong><small>${esc(formatFileSize(file.size))}</small></div>`;
+        return `
+          <div class="att-card ${isVisual ? 'is-visual' : 'is-file'}" role="listitem" data-att-id="${esc(id)}">
+            ${mediaHtml}
+            <button type="button" class="att-card-remove" data-att-rm="${esc(id)}" aria-label="Remove ${esc(file.name)}">×</button>
+            ${isVisual ? `<button type="button" class="att-card-vo ${isViewOnce ? 'active' : ''}" data-att-vo="${esc(id)}" title="Toggle View Once (1×)" aria-pressed="${isViewOnce ? 'true' : 'false'}">1×</button>` : ''}
+          </div>
+        `;
+      }).join('')}
     </div>
-    <button type="button" class="att-vo-pill ${isViewOnce ? 'active' : ''}" id="att-vo-toggle" title="Make this attachment View Once (1×)">1× View once</button>
-    <button type="button" class="compose-ctx-close" id="att-prev-remove" aria-label="Remove attachment">×</button>
   `;
 
-  const voBtn = $('#att-vo-toggle', bar);
-  const rmBtn = $('#att-prev-remove', bar);
-  [voBtn, rmBtn].forEach((b) => {
-    b?.addEventListener('pointerdown', (e) => e.preventDefault());
-    b?.addEventListener('mousedown', (e) => e.preventDefault());
+  bar.querySelectorAll('[data-att-rm], [data-att-vo]').forEach((btn) => {
+    btn.addEventListener('pointerdown', (e) => e.preventDefault());
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
   });
 
-  voBtn.onclick = () => {
-    haptic(10);
-    state.pendingAttachment.isViewOnce = !state.pendingAttachment.isViewOnce;
-    renderAttachmentPreview();
-  };
-  rmBtn.onclick = () => {
-    clearPendingAttachment();
-  };
+  bar.querySelectorAll('[data-att-vo]').forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const target = (state.pendingAttachments || []).find((x) => x.id === btn.dataset.attVo);
+      if (!target) return;
+      haptic(10);
+      target.isViewOnce = !target.isViewOnce;
+      renderAttachmentPreview();
+      showToast(target.isViewOnce ? 'View-once enabled for this item' : 'View-once turned off');
+    };
+  });
+
+  bar.querySelectorAll('[data-att-rm]').forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      clearPendingAttachment(btn.dataset.attRm);
+    };
+  });
 }
 
-export function clearPendingAttachment() {
-  if (state.pendingAttachment?.previewUrl) {
-    URL.revokeObjectURL(state.pendingAttachment.previewUrl);
+export function clearPendingAttachment(itemId = null) {
+  const list = state.pendingAttachments || [];
+  if (itemId) {
+    const idx = list.findIndex((x) => x.id === itemId);
+    if (idx >= 0) {
+      if (list[idx]?.previewUrl) URL.revokeObjectURL(list[idx].previewUrl);
+      list.splice(idx, 1);
+    }
+  } else {
+    for (const item of list) {
+      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    }
+    state.pendingAttachments = [];
+    const fileInput = $('#file-input');
+    if (fileInput) fileInput.value = '';
+    const mediaInput = $('#media-input');
+    if (mediaInput) mediaInput.value = '';
   }
-  state.pendingAttachment = null;
-  const input = $('#file-input');
-  if (input) input.value = '';
   renderAttachmentPreview();
 }
 

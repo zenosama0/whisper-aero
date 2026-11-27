@@ -1,5 +1,5 @@
 import * as api from '../api.js';
-import { searchEmojis } from '../emoji.js?v=25';
+import { searchEmojis } from '../emoji.js?v=26';
 import {
   getNativeCapabilities,
   isNativeAndroid,
@@ -12,7 +12,7 @@ import {
   setNativeBackgroundSync,
   setWindowsMinimizeToTray,
   setWindowsStartup,
-} from '../native.js?v=25';
+} from '../native.js?v=26';
 import {
   CHAT_THEME_PRESETS,
   DEFAULT_DOUBLE_TAP_EMOJI,
@@ -470,7 +470,7 @@ function renderNotificationSettingsInner() {
 function renderPlatformExtraSettings() {
   if (isNativeAndroid()) {
     const caps = getNativeCapabilities() || {};
-    const bgOn = caps.backgroundSyncEnabled !== false;
+    const bgOn = Boolean(caps.backgroundSyncEnabled);
     const batteryOptimized = Boolean(caps.batteryOptimized);
     const bubblesOn = caps.bubblesEnabled !== false;
     return `
@@ -479,7 +479,7 @@ function renderPlatformExtraSettings() {
         <button class="secondary-btn" type="button" id="android-bubbles-btn">Manage</button>
       </div>
       <div class="settings-row">
-        <span>Background message listener<small>Keep native Android service &amp; worker synced when closed</small></span>
+        <span>Instant background socket<small>Keep a persistent connection (shows in Active apps). Periodic silent checks always run.</small></span>
         <input type="checkbox" id="android-bg-toggle" ${bgOn ? 'checked' : ''}>
       </div>
       <div class="settings-row">
@@ -760,7 +760,7 @@ export async function openSettingsPage({ onThemeChange, onChatThemeChange, onSig
     if (block) block.innerHTML = renderNotificationSettingsInner();
     const caps = getNativeCapabilities() || {};
     const bgToggle = $('#android-bg-toggle', page);
-    if (bgToggle) bgToggle.checked = caps.backgroundSyncEnabled !== false;
+    if (bgToggle) bgToggle.checked = Boolean(caps.backgroundSyncEnabled);
     const batStatus = $('#android-battery-status', page);
     const batBtn = $('#android-battery-btn', page);
     if (batStatus && batBtn) {
