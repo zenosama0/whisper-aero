@@ -1,6 +1,6 @@
 import { config, configured, supabase } from './config.js';
 import * as api from './api.js';
-import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=27';
+import { replaceEmojiShortcodes, searchEmojis } from './emoji.js?v=28';
 import {
   clearNativeSession,
   getNativeStoredSession,
@@ -14,7 +14,7 @@ import {
   syncNativeSession,
   syncNativeTheme,
   triggerNativeCallAlarm,
-} from './native.js?v=27';
+} from './native.js?v=28';
 import { joinConversationTyping, sendTypingSignal, startRealtime, stopRealtime } from './realtime.js';
 import {
   getActiveChat,

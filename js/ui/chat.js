@@ -7,7 +7,7 @@ import {
   nativeCopyText,
   nativeShareText,
   openNativeChatBubble,
-} from '../native.js?v=27';
+} from '../native.js?v=28';
 import {
   DEFAULT_DOUBLE_TAP_EMOJI,
   DEFAULT_REACTION_PALETTE,

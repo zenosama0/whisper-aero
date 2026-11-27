@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "617319821448",
+    "project_id": "whisper-aero",
+    "storage_bucket": "whisper-aero.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:617319821448:android:88d115247cdefe12e56f3d",
+        "android_client_info": {
+          "package_name": "com.whisperaero.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyADyYOH6PUGtyFIdd7nxzVh__Ghs0n2dnY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
